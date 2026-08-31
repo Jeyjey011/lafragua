@@ -17,13 +17,15 @@ const cabGit = {
   'User-Agent': 'LaFragua-CerebroNocturno/1.0'
 };
 
+// Temas por orden del dueño: SOLO lo creativo — estilos, prompts, modelos.
+// Nada de políticas de plataformas: eso no le sirve.
 const TEMAS = [
-  'hooks y guiones de anuncios animados que están funcionando en TikTok e Instagram ahora mismo para suplementos y productos de transformación física',
-  'técnicas actuales de prompts para video de animación con IA (Seedance, Kling, Veo): qué estructura de prompt da personajes consistentes y movimiento limpio',
-  'cuándo funciona mejor un personaje hablando a cámara y cuándo voz en off en anuncios cortos de TikTok, y qué dice la data reciente',
-  'duración óptima y ritmo de escenas en anuncios de video para conversión: cuántas escenas, de cuántos segundos, dónde recortar',
-  'cómo construir conexión emocional en anuncios animados de historias (humillación, antagonista, vuelco) sin que la plataforma los rechace',
-  'errores comunes que hacen que Meta o TikTok rechacen anuncios de suplementos y cómo evitarlos'
+  'estilos de animación que están explotando en TikTok ahora mismo (frutinovelas 3D, Pixar hiperreal, y los que vengan): cómo se ven exactamente, qué los distingue visualmente y qué prompts los producen',
+  'técnicas actuales de prompts para video con IA (Seedance, Kling, Veo, Sora): la estructura exacta de prompt que da personajes consistentes entre tomas, movimiento limpio y cámara con intención',
+  'técnicas de prompts para imagen con IA (nano-banana, Seedream, gpt-image): cómo describir personajes, envases de producto y escenas para que salgan idénticos entre imágenes',
+  'modelos nuevos o mejorados de video e imagen con IA este mes: qué hacen mejor que los anteriores, cuánto cuestan y para qué tipo de creatividad conviene cada uno',
+  'cómo construyen su storyboard las mejores creatividades animadas: cuántas escenas, ritmo, transiciones entre tomas y cómo montan el momento icónico',
+  'emoción y actuación en personajes animados con IA: cómo pedir en el prompt expresiones faciales, lágrimas, gestos y drama de telenovela que se sientan reales'
 ];
 
 const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
@@ -50,14 +52,14 @@ const tema = TEMAS[idx];
 console.log('Tema de esta noche: ' + tema);
 
 // 2. Investigar con búsqueda web real.
-const sistema = 'Eres el cerebro de un estudio de anuncios animados con IA (historias con antagonista y vuelco, estilo Pixar/Simpson/anime, productos de transformación física, mercado Colombia). ' +
-  'LA FÓRMULA DE LA CASA, INNEGOCIABLE: los antes/después corporales agresivos y extremos SON lo que vende aquí. ' +
-  'NUNCA propongas sustituirlos, suavizarlos ni reemplazarlos por "ganancias de energía" o "bienestar". ' +
-  'Si una plataforma los restringe, tu trabajo es traer la TÁCTICA para pasar la revisión SIN renunciar a la fórmula (formatos, encuadres, palabras que evitar), formulada en no_hagas. ' +
+const sistema = 'Eres el cerebro CREATIVO de un estudio de anuncios animados con IA (historias con antagonista y vuelco, estilos Pixar/Simpson/anime/frutinovela, productos de transformación física, mercado Colombia). ' +
+  'LA FÓRMULA DE LA CASA, INNEGOCIABLE: antes/después corporales agresivos y extremos, lenguaje directo sin censura y neuromarketing — eso ES lo que vende aquí. NUNCA propongas restringirlo, sustituirlo ni suavizarlo. ' +
+  'TU TERRENO ES LO CREATIVO: estilos de animación y cómo se ven, técnicas de prompt, modelos de IA y sus trucos, storyboard, escenas, cámara, emoción. Tu trabajo es ayudar a crear MÁS y MEJOR contenido con la misma fórmula. ' +
+  'PROHIBIDO traer análisis de políticas de Meta/TikTok, moderación o compliance: al dueño no le sirve y no lo quiere. ' +
   'Investiga en la web el tema que se te da y devuelve SOLO un JSON: ' +
-  '{"hallazgos":["máx 4 datos concretos y accionables, en español, 1 línea cada uno"],' +
-  '"reglas_nuevas":["máx 3 PROPUESTAS de regla, cortas, empezando por un verbo, alineadas con la fórmula de la casa — el dueño las aprueba o las rechaza, no entran solas"],' +
-  '"no_hagas":["máx 3 errores concretos que hay que evitar, formulados como NO hagas X porque Y"]} ' +
+  '{"hallazgos":["máx 4 datos concretos y accionables sobre lo creativo, en español, 1 línea cada uno — si es un truco de prompt, escribe el truco literal"],' +
+  '"reglas_nuevas":["máx 3 reglas creativas, cortas, empezando por un verbo, que AYUDEN a producir más y mejor (prompts, escenas, estilos) — jamás restricciones a la fórmula de la casa"],' +
+  '"no_hagas":["máx 3 errores CREATIVOS que arruinan una animación o un prompt, formulados como NO hagas X porque Y"]} ' +
   'Nada de generalidades: si no encuentras algo específico y actual, devuelve menos elementos.';
 
 const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -78,28 +80,47 @@ const h = parseLoose(bloques.length ? bloques[bloques.length - 1].text : '');
 h.hallazgos = h.hallazgos || []; h.reglas_nuevas = h.reglas_nuevas || []; h.no_hagas = h.no_hagas || [];
 console.log('Hallazgos: ' + h.hallazgos.length + ' · reglas nuevas: ' + h.reglas_nuevas.length + ' · no hagas: ' + h.no_hagas.length);
 
-// 3. NADA entra solo al cerebro (orden del dueño): las reglas van como
-//    PROPUESTAS en el parte, y él las adopta o las veta desde la app. Las ya
-//    vetadas ni siquiera se vuelven a proponer.
+// 3. EL FILTRO DE LA CASA (orden del dueño): las reglas entran SOLAS, pero
+//    jamás una que restrinja los antes/después, el lenguaje, lo sin censura o
+//    el neuromarketing. Eso se corta en código, no de palabra. Las vetadas por
+//    el dueño tampoco vuelven a entrar.
+function reglaRestrictiva(t) {
+  const s = ' ' + norm(t) + ' ';
+  // política de plataformas: fuera siempre
+  if (/(meta|tiktok|facebook|instagram|politic|complian|moderacion|censur|prohibid|restricc|rechaz|ftc|claim)/.test(s)) return true;
+  // un verbo de recorte apuntando a la fórmula de la casa: fuera
+  const recorta = /(sustituye|sustituir|reemplaza|suaviza|evita|elimina|quita|reduce|modera|no uses|no muestres|no hagas|en lugar de|en vez de)/.test(s);
+  const laFormula = /(antes|despues|transformacion|corporal|cuerpo|agresiv|lenguaje|tono|sin censura|neuromarketing|gluteo|busto|cintura|peso|extrem)/.test(s);
+  return recorta && laFormula;
+}
 const ahora = new Date().toISOString();
 const vetadas = new Set((cerebro.vetadas || []).map(norm));
-const propuestas = h.reglas_nuevas
-  .map(t => String(t).trim())
-  .filter(t => t && !vetadas.has(norm(t)) && !cerebro.reglas.some(r => norm(r.t) === norm(t)));
+const yaHay = new Set(cerebro.reglas.map(r => norm(r.t)));
+let entraron = 0, descartadas = 0;
+const limpias = [];
+for (const bruta of h.reglas_nuevas) {
+  const t = String(bruta).trim();
+  if (!t || yaHay.has(norm(t)) || vetadas.has(norm(t))) continue;
+  if (reglaRestrictiva(t)) { descartadas++; continue; }
+  cerebro.reglas.unshift({ t: t, f: ahora, de: 'jarvis-nube' });
+  yaHay.add(norm(t)); limpias.push(t); entraron++;
+}
+cerebro.reglas = cerebro.reglas.slice(0, 40);
+cerebro.actualizado = ahora;
 
-// 4. Guardar SOLO el parte de la noche — cerebro.json no se toca.
-//    La app lo lee al abrir, avisa sola, y ofrece adoptar o vetar cada propuesta.
+// 4. Guardar el cerebro (con las vetadas intactas) y el parte de la noche.
 const parte = {
   fecha: ahora, tema: tema, tema_idx: idx + 1,
-  hallazgos: h.hallazgos, no_hagas: h.no_hagas, reglas_nuevas: propuestas,
-  son_propuestas: true
+  hallazgos: h.hallazgos, no_hagas: h.no_hagas, reglas_nuevas: limpias,
+  reglas_que_entraron: entraron, descartadas_por_el_filtro: descartadas
 };
 const w = await fetch('https://api.github.com/gists/' + GIST, {
   method: 'PATCH',
   headers: { ...cabGit, 'Content-Type': 'application/json' },
   body: JSON.stringify({ files: {
+    'cerebro.json': { content: JSON.stringify(cerebro, null, 1) },
     'jarvis.json': { content: JSON.stringify(parte, null, 1) }
   }})
 });
 if (!w.ok) { console.error('No se pudo escribir el gist: HTTP ' + w.status); process.exit(1); }
-console.log('Parte guardado: ' + h.hallazgos.length + ' hallazgos, ' + propuestas.length + ' propuestas (ninguna entra sin el OK del dueño).');
+console.log('Cerebro: ' + entraron + ' reglas entraron, ' + descartadas + ' descartadas por el filtro de la casa. Total: ' + cerebro.reglas.length + '.');
