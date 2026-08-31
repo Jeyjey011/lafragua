@@ -51,9 +51,12 @@ console.log('Tema de esta noche: ' + tema);
 
 // 2. Investigar con búsqueda web real.
 const sistema = 'Eres el cerebro de un estudio de anuncios animados con IA (historias con antagonista y vuelco, estilo Pixar/Simpson/anime, productos de transformación física, mercado Colombia). ' +
+  'LA FÓRMULA DE LA CASA, INNEGOCIABLE: los antes/después corporales agresivos y extremos SON lo que vende aquí. ' +
+  'NUNCA propongas sustituirlos, suavizarlos ni reemplazarlos por "ganancias de energía" o "bienestar". ' +
+  'Si una plataforma los restringe, tu trabajo es traer la TÁCTICA para pasar la revisión SIN renunciar a la fórmula (formatos, encuadres, palabras que evitar), formulada en no_hagas. ' +
   'Investiga en la web el tema que se te da y devuelve SOLO un JSON: ' +
   '{"hallazgos":["máx 4 datos concretos y accionables, en español, 1 línea cada uno"],' +
-  '"reglas_nuevas":["máx 3 reglas cortas empezando por un verbo, que una IA pueda seguir al escribir guiones o prompts — solo si el hallazgo lo amerita"],' +
+  '"reglas_nuevas":["máx 3 PROPUESTAS de regla, cortas, empezando por un verbo, alineadas con la fórmula de la casa — el dueño las aprueba o las rechaza, no entran solas"],' +
   '"no_hagas":["máx 3 errores concretos que hay que evitar, formulados como NO hagas X porque Y"]} ' +
   'Nada de generalidades: si no encuentras algo específico y actual, devuelve menos elementos.';
 
@@ -75,33 +78,28 @@ const h = parseLoose(bloques.length ? bloques[bloques.length - 1].text : '');
 h.hallazgos = h.hallazgos || []; h.reglas_nuevas = h.reglas_nuevas || []; h.no_hagas = h.no_hagas || [];
 console.log('Hallazgos: ' + h.hallazgos.length + ' · reglas nuevas: ' + h.reglas_nuevas.length + ' · no hagas: ' + h.no_hagas.length);
 
-// 3. Fundir las reglas nuevas sin repetir, quedando lo más nuevo (tope 40, como la app).
+// 3. NADA entra solo al cerebro (orden del dueño): las reglas van como
+//    PROPUESTAS en el parte, y él las adopta o las veta desde la app. Las ya
+//    vetadas ni siquiera se vuelven a proponer.
 const ahora = new Date().toISOString();
-const yaHay = new Set(cerebro.reglas.map(r => norm(r.t)));
-let nuevas = 0;
-for (const t of h.reglas_nuevas) {
-  const limpio = String(t).trim();
-  if (!limpio || yaHay.has(norm(limpio))) continue;
-  cerebro.reglas.unshift({ t: limpio, f: ahora, de: 'jarvis-nube' });
-  yaHay.add(norm(limpio)); nuevas++;
-}
-cerebro.reglas = cerebro.reglas.slice(0, 40);
-cerebro.actualizado = ahora;
+const vetadas = new Set((cerebro.vetadas || []).map(norm));
+const propuestas = h.reglas_nuevas
+  .map(t => String(t).trim())
+  .filter(t => t && !vetadas.has(norm(t)) && !cerebro.reglas.some(r => norm(r.t) === norm(t)));
 
-// 4. Guardar: el cerebro con las reglas, y jarvis.json con el parte de la noche
-//    (la app lo lee al abrir y le AVISA al usuario que hay algo nuevo).
+// 4. Guardar SOLO el parte de la noche — cerebro.json no se toca.
+//    La app lo lee al abrir, avisa sola, y ofrece adoptar o vetar cada propuesta.
 const parte = {
   fecha: ahora, tema: tema, tema_idx: idx + 1,
-  hallazgos: h.hallazgos, no_hagas: h.no_hagas, reglas_nuevas: h.reglas_nuevas,
-  reglas_que_entraron: nuevas
+  hallazgos: h.hallazgos, no_hagas: h.no_hagas, reglas_nuevas: propuestas,
+  son_propuestas: true
 };
 const w = await fetch('https://api.github.com/gists/' + GIST, {
   method: 'PATCH',
   headers: { ...cabGit, 'Content-Type': 'application/json' },
   body: JSON.stringify({ files: {
-    'cerebro.json': { content: JSON.stringify(cerebro, null, 1) },
     'jarvis.json': { content: JSON.stringify(parte, null, 1) }
   }})
 });
 if (!w.ok) { console.error('No se pudo escribir el gist: HTTP ' + w.status); process.exit(1); }
-console.log('Cerebro actualizado: ' + nuevas + ' reglas nuevas entraron. Total: ' + cerebro.reglas.length + '.');
+console.log('Parte guardado: ' + h.hallazgos.length + ' hallazgos, ' + propuestas.length + ' propuestas (ninguna entra sin el OK del dueño).');
