@@ -4,7 +4,7 @@
 name: cerebro-nocturno
 on:
   schedule:
-    - cron: '0 8 * * *'
+    - cron: "*/15 * * * *"   # TEMPORAL para la prueba — se devuelve a las 3am al verificar
   workflow_dispatch: {}
 permissions: {}
 jobs:
