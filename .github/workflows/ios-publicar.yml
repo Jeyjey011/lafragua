@@ -1,0 +1,109 @@
+# Compila LA FRAGUA para iPhone y la sube a TestFlight / App Store Connect.
+# No hace falta tener un Mac: GitHub presta uno, y en repositorios publicos es gratis.
+#
+# Hacen falta 4 secretos en el repositorio
+# (Settings -> Secrets and variables -> Actions -> New repository secret):
+#
+#   APPSTORE_KEY_ID      el ID de tu clave de App Store Connect (10 caracteres)
+#   APPSTORE_ISSUER_ID   el Issuer ID (un UUID largo, sale en la misma pantalla)
+#   APPSTORE_API_KEY_P8  el archivo .p8 de esa clave, convertido a base64
+#   TEAM_ID              tu Team ID (10 caracteres, en developer.apple.com -> Membership)
+#
+# Todo esto se saca desde la web de Apple, sin Mac. Los pasos exactos estan en
+# "LEEME - publicar en la App Store.txt".
+
+name: iOS
+
+on:
+  workflow_dispatch:        # se lanza a mano desde la pestana Actions
+
+jobs:
+  construir:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar la clave de Apple
+        env:
+          CLAVE_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+          ID_CLAVE: ${{ secrets.APPSTORE_KEY_ID }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/claves"
+          echo "$CLAVE_P8" | base64 --decode > "$RUNNER_TEMP/claves/AuthKey_$ID_CLAVE.p8"
+          # Sitio donde altool la busca sola
+          mkdir -p ~/private_keys
+          cp "$RUNNER_TEMP/claves/AuthKey_$ID_CLAVE.p8" ~/private_keys/
+
+      - name: Generar el proyecto de Xcode
+        run: |
+          brew install xcodegen
+          cd ios
+          xcodegen generate
+          ls -la LaFragua.xcodeproj
+
+      # -allowProvisioningUpdates con la clave de API hace que Xcode cree solo
+      # el certificado y el perfil. Es lo que evita el paso del .p12, que
+      # normalmente obliga a abrir Llaveros en un Mac.
+      - name: Archivar
+        env:
+          ID_CLAVE:  ${{ secrets.APPSTORE_KEY_ID }}
+          ID_EMISOR: ${{ secrets.APPSTORE_ISSUER_ID }}
+          TEAM_ID:   ${{ secrets.TEAM_ID }}
+        run: |
+          cd ios
+          xcodebuild archive \
+            -project LaFragua.xcodeproj \
+            -scheme LaFragua \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/LaFragua.xcarchive" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/claves/AuthKey_$ID_CLAVE.p8" \
+            -authenticationKeyID "$ID_CLAVE" \
+            -authenticationKeyIssuerID "$ID_EMISOR"
+
+      - name: Exportar el .ipa
+        env:
+          ID_CLAVE:  ${{ secrets.APPSTORE_KEY_ID }}
+          ID_EMISOR: ${{ secrets.APPSTORE_ISSUER_ID }}
+          TEAM_ID:   ${{ secrets.TEAM_ID }}
+        run: |
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0"><dict>' \
+            '<key>method</key><string>app-store-connect</string>' \
+            "<key>teamID</key><string>$TEAM_ID</string>" \
+            '<key>uploadSymbols</key><true/>' \
+            '</dict></plist>' > "$RUNNER_TEMP/export.plist"
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/LaFragua.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -exportPath "$RUNNER_TEMP/salida" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/claves/AuthKey_$ID_CLAVE.p8" \
+            -authenticationKeyID "$ID_CLAVE" \
+            -authenticationKeyIssuerID "$ID_EMISOR"
+
+      - name: Subir a App Store Connect
+        env:
+          ID_CLAVE:  ${{ secrets.APPSTORE_KEY_ID }}
+          ID_EMISOR: ${{ secrets.APPSTORE_ISSUER_ID }}
+        run: |
+          xcrun altool --upload-app \
+            -f "$RUNNER_TEMP/salida/LaFragua.ipa" \
+            -t ios \
+            --apiKey "$ID_CLAVE" \
+            --apiIssuer "$ID_EMISOR"
+
+      - name: Guardar el .ipa por si acaso
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LaFragua-ipa
+          path: ${{ runner.temp }}/salida/*.ipa
+          if-no-files-found: ignore
