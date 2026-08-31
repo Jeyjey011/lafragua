@@ -431,6 +431,16 @@ input:focus, textarea:focus, select:focus{outline:none; border-color:var(--ember
   70%{opacity:0; transform:translate(var(--dx,10px),-18px) scale(.4);}
   100%{opacity:0;}
 }
+/* Yunque en pequeño, dentro del área de CADA botón mientras genera. Reusa la
+   misma animación de la carga grande, encogida y en línea con el texto. */
+.mini-forja{display:inline-flex; align-items:center; gap:8px; vertical-align:middle;}
+.mini-forja .escena{position:relative; width:30px; height:24px; flex-shrink:0;}
+.mini-forja .mazo{position:absolute; top:0; left:9px; width:5px; height:15px; background:var(--ember,#ff7a1a); border-radius:2px; transform-origin:bottom center; animation:strike 1.05s ease-in-out infinite;}
+.mini-forja .yunq{position:absolute; bottom:0; left:2px; width:24px; height:9px; background:var(--bg-panel-3,#2a211c); border:1px solid var(--border,#3a2e26); border-radius:2px 2px 5px 5px;}
+.mini-forja .chispa{position:absolute; bottom:8px; left:15px; width:2px; height:2px; background:var(--ember,#ff7a1a); border-radius:50%; opacity:0; animation:spark 1.05s ease-in-out infinite;}
+.mini-forja .chispa:nth-child(4){left:18px; animation-delay:.06s;}
+.mini-forja .chispa:nth-child(5){left:12px; animation-delay:.12s;}
+.mini-forja .txt{font-size:12.5px; color:var(--text-dim,#a99);}
 .forge-loader .txt b{display:block; font-size:14px; color:var(--text);}
 .forge-loader .txt span{font-size:12.5px; color:var(--text-dim);}
 
@@ -3002,6 +3012,12 @@ REGLAS DE LAS IDEAS ANIMADAS — esto es lo que separa un video que se comparte 
 6. La humillación se la lleva SIEMPRE el personaje dentro de la historia, jamás el espectador.
    Nada de hacer sentir mal a quien mira por su cuerpo: además de ser un anuncio peor, es lo que
    Meta tumba por "percepción negativa de uno mismo".
+6b. EL ARCO ES DOLOR → PRODUCTO → TRANSFORMACIÓN, SIEMPRE. Toda idea nace del DOLOR REAL y
+   específico que sufre el cliente (el que dice la ficha), lo pone en carne del personaje en el
+   hook, y la ÚNICA salida de ese dolor es NUESTRO PRODUCTO — no fuerza de voluntad, no el
+   gimnasio, no otra marca. El producto es el punto de giro: antes de él, sufrimiento; después de
+   él, la transformación que humilla al antagonista. Si una idea no arranca de un dolor concreto o
+   la solución no es claramente el producto, no sirve: reescríbela.
 7. ARQUETIPOS. Usa uno distinto en cada idea. Elige el bloque según a quién le vende el producto
    —lo dice el cliente ideal de la ficha—; si sirve para los dos, reparte mitad y mitad.
 
@@ -5001,17 +5017,26 @@ function ponerBotonCola(){
   }
 }
 
+/// El yunque animado dentro del área del botón, mientras genera. El texto va al
+/// lado del yunque en vez de solo; al terminar se limpia y el yunque desaparece.
+function forjaHtml(txt){
+  return '<span class="mini-forja"><span class="escena">' +
+    '<span class="mazo"></span><span class="yunq"></span>' +
+    '<span class="chispa"></span><span class="chispa"></span><span class="chispa"></span>' +
+    '</span><span class="txt">' + escapeHtml(txt||'forjando...') + '</span></span>';
+}
 async function runGen(genId, kind, fn, altFn, etiqueta){
   const statusEl = document.getElementById('genstatus-'+genId);
   const resultEl = document.getElementById('genresult-'+genId);
   const btn = document.querySelector(`[data-gen="${genId}"]`);
   if(btn) btn.disabled = true;
-  const setStatus = (txt)=>{ if(statusEl) statusEl.textContent = txt; };
+  // El estado ahora se pinta CON el yunque martillando al lado.
+  const setStatus = (txt)=>{ if(statusEl) statusEl.innerHTML = forjaHtml((txt||'').trim() || 'forjando...'); };
   setStatus(' generando... (puede tardar hasta un par de minutos)');
   _currentGenId = genId; _currentKind = kind; // wsSubmit/amSubmit registran la tarea pendiente con estos datos
   try{
     const url = await fn(setStatus);
-    setStatus('');
+    if(statusEl) statusEl.textContent = '';
     if(resultEl) renderGenResult(resultEl, url, kind, etiqueta || genId);
     recordarGenerado(genId, url, kind, etiqueta);   // sobrevive a cerrar la app
     try{ apuntarGasto(genId, kind, etiqueta, kind==='video'
@@ -5040,7 +5065,7 @@ async function runGen(genId, kind, fn, altFn, etiqueta){
       const altBtn = document.querySelector(`[data-gen-alt="${genId}"]`);
       if(altBtn) altBtn.onclick = ()=>runGen(genId, kind, altFn);
     } else {
-      setStatus(' ⚠️ '+err.message);
+      if(statusEl) statusEl.textContent = ' ⚠️ '+err.message;  // el error va sin yunque
     }
   }finally{
     if(btn) btn.disabled = false;
@@ -7123,13 +7148,18 @@ function renderTomasFinales(escenas){
         <textarea id="vidextra-${n}" rows="2" placeholder="Ej: que la cámara se acerque despacio a la cara · que sonría al final · más luz"></textarea>
         <small class="help">Se pega al final del prompt al generar. Escríbelo cuando quieras, en español o en inglés — no dispara ninguna revisión del guion ni hay que esperar nada.</small>
       </div>
-      <div class="field" style="max-width:420px;">
+      <div class="field" style="max-width:520px;">
         <label>¿El personaje habla en cámara?</label>
         <select id="modohabla-${n}">
           <option value="off">No — voz en off (el personaje no mueve la boca)</option>
           <option value="habla">Sí — que diga la frase en cámara, con los labios</option>
         </select>
-        <small class="help">Con voz en off la boca no importa y sale más barato de acertar. Si eliges que hable, la frase se mete dentro del prompt del video para que el modelo la sincronice — cuesta lo mismo, pero acertar a la primera es más difícil.</small>
+        <small class="help">Con voz en off la boca no importa y sale más barato de acertar. Si eliges que hable, se abre abajo el diálogo exacto que dirá — editable — y se mete en el prompt para que el modelo lo sincronice.</small>
+        <div id="dialogoWrap-${n}" style="display:none; margin-top:8px;">
+          <label>💬 Lo que DICE el personaje en cámara (editable)</label>
+          <textarea id="dialogo-${n}" rows="2" placeholder="La frase que se le va a leer en los labios"></textarea>
+          <small class="help">Sale de la voz de esta toma, pero puedes cambiarla — esto es lo que el video le pone en la boca. Sin etiquetas de emoción: eso va en la voz, no en los labios.</small>
+        </div>
       </div>
       <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
         <button class="btn small" data-gen="vid-${n}">🎬 Generar video</button>
@@ -7175,6 +7205,25 @@ function renderTomasFinales(escenas){
       }catch(err){ toast('⚠️ ' + err.message); }
       finally{ bEmo.disabled = false; bEmo.textContent = antes; }
     };
+    // Al elegir "habla en cámara" se abre el diálogo, prellenado con la voz de
+    // la toma sin etiquetas, para que se VEA y se pueda editar lo que dirá.
+    const selHabla = document.getElementById('modohabla-'+n);
+    const wrapDlg = document.getElementById('dialogoWrap-'+n);
+    const campoDlg = document.getElementById('dialogo-'+n);
+    if(selHabla && wrapDlg && campoDlg){
+      const sincDlg = ()=>{
+        if(selHabla.value === 'habla'){
+          wrapDlg.style.display = '';
+          if(!campoDlg.value.trim()){
+            campoDlg.value = ((document.getElementById('voztxt-'+n)||{}).value || '').replace(/\[[^\]]+\]/g,'').trim();
+          }
+        }else{
+          wrapDlg.style.display = 'none';
+        }
+      };
+      selHabla.onchange = sincDlg;
+      sincDlg();
+    }
     const bVid = document.querySelector(`[data-gen="vid-${n}"]`);
     // Las emociones se suman al campo libre de esta toma, sin borrar lo que haya.
     document.querySelectorAll(`[data-emotoma^="${n}|"]`).forEach(b=>{
@@ -7204,9 +7253,11 @@ function renderTomasFinales(escenas){
 
     if(bVid) bVid.onclick = ()=>{
       let texto = document.getElementById('vidtxt-'+n).textContent;
-      // Si el personaje habla en cámara, la frase entra en el prompt del video.
+      // Si el personaje habla en cámara, entra lo que el usuario escribió en el
+      // campo de diálogo (si lo tocó); si no, la voz de la toma sin etiquetas.
       const modo = ((document.getElementById('modohabla-'+n)||{}).value) || 'off';
-      const dicho = ((document.getElementById('voztxt-'+n)||{}).value || '').replace(/\[[^\]]+\]/g,'').trim();
+      const dialogoManual = ((document.getElementById('dialogo-'+n)||{}).value || '').trim();
+      const dicho = (dialogoManual || ((document.getElementById('voztxt-'+n)||{}).value || '')).replace(/\[[^\]]+\]/g,'').trim();
       if(modo === 'habla' && dicho){
         texto += '\nThe character speaks these exact words to camera, lips synced, natural mouth movement: "' + dicho + '"';
       }else{
