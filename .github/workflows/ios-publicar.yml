@@ -36,6 +36,25 @@ jobs:
           mkdir -p ~/private_keys
           cp "$RUNNER_TEMP/claves/AuthKey_$ID_CLAVE.p8" ~/private_keys/
 
+      - name: Meter las llaves en la app (nunca viajan en el repo)
+        env:
+          OA_KEY: ${{ secrets.APP_OA_KEY }}
+          EL_KEY: ${{ secrets.APP_EL_KEY }}
+        run: |
+          # El index.html del repo trae marcadores, no llaves. Aqui se rellenan
+          # con los secretos privados, justo antes de construir. Asi las llaves
+          # existen dentro del .ipa (para que la app del equipo funcione sola)
+          # pero jamas quedan escritas en el codigo publico.
+          python3 - "$OA_KEY" "$EL_KEY" <<'PY'
+          import sys, io
+          oa, el = sys.argv[1], sys.argv[2]
+          p = 'ios/LaFragua/index.html'
+          s = io.open(p, encoding='utf-8').read()
+          s = s.replace('__FRAGUA_OA_KEY__', oa).replace('__FRAGUA_EL_KEY__', el)
+          io.open(p, 'w', encoding='utf-8').write(s)
+          print('llaves inyectadas' if oa and el else 'AVISO: algun secreto de llave esta vacio')
+          PY
+
       - name: Generar el proyecto de Xcode
         run: |
           brew install xcodegen
