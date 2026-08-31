@@ -1,0 +1,130 @@
+════════════════════════════════════════════════════════════════════
+   LA FRAGUA EN TU iPHONE — TESTFLIGHT, PASO A PASO
+════════════════════════════════════════════════════════════════════
+
+Esto pone la app en tu iPhone y en los de tu equipo, con un link, sin App Store
+pública y sin revisión estricta de Apple. Todo lo técnico ya está hecho y
+probado: el código compila en el Mac de la nube de GitHub. Solo faltan los
+datos de Apple, que solo puedes crear tú.
+
+Necesitas: ser mayor de edad, una tarjeta, y como 30 minutos. Ningún Mac.
+
+
+────────────────────────────────────────────────────────────────────
+PASO 1 — LA CUENTA DE APPLE DEVELOPER  (US$ 99 al año, de Apple)
+────────────────────────────────────────────────────────────────────
+1. Entra a  developer.apple.com/programs/enroll
+2. Inicia sesión con tu Apple ID (el del iPhone sirve).
+3. Sigue el enrolamiento como INDIVIDUO (es lo más rápido; empresa pide más papeles).
+4. Paga los US$ 99.
+
+Apple tarda de unas horas a 2 días en aprobar. Cuando te llegue el correo de
+"Welcome", sigue con el paso 2. Sin este paso NADA de lo demás funciona: es
+el requisito de Apple, no hay forma de saltárselo.
+
+
+────────────────────────────────────────────────────────────────────
+PASO 2 — SACAR LOS 5 DATOS  (todo en la web, sin Mac)
+────────────────────────────────────────────────────────────────────
+Los vas a pegar en GitHub en el paso 3. Ten a mano un bloc de notas.
+
+  ▸ TEAM_ID
+    developer.apple.com/account  →  arriba a la derecha, "Membership details".
+    Copia el "Team ID": son 10 caracteres tipo  A1B2C3D4E5.
+
+  ▸ APPSTORE_KEY_ID  y  APPSTORE_ISSUER_ID  y  el archivo .p8
+    Entra a  appstoreconnect.apple.com/access/integrations/api
+    (o: App Store Connect → Users and Access → Integrations → App Store Connect API)
+    1. Arriba verás "Issuer ID": un código largo con guiones. Cópialo →
+       ese es  APPSTORE_ISSUER_ID.
+    2. Botón azul "+"  para generar una clave nueva.
+       - Nombre: lo que quieras, ej. "LA FRAGUA".
+       - Access / Role: elige  "App Manager".
+       - Generar.
+    3. En la lista aparece con un "Key ID" de 10 caracteres. Cópialo →
+       ese es  APPSTORE_KEY_ID.
+    4. A la derecha, "Download API Key": baja el archivo  AuthKey_XXXX.p8
+       ¡OJO! solo se puede descargar UNA vez. Guárdalo bien.
+
+  ▸ Convertir el .p8 a texto (base64) para poder pegarlo
+    En este mismo computador, abre PowerShell y pega esto (cambia la ruta por
+    donde bajaste el archivo):
+
+       [Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\Downloads\AuthKey_XXXX.p8")) | Set-Clipboard
+
+    Eso deja el texto copiado en el portapapeles → ese es  APPSTORE_API_KEY_P8.
+
+
+────────────────────────────────────────────────────────────────────
+PASO 3 — PEGAR LOS DATOS EN GITHUB  (una sola vez)
+────────────────────────────────────────────────────────────────────
+Entra a:
+   github.com/Jeyjey011/lafragua/settings/secrets/actions
+
+Botón "New repository secret", y crea estos CUATRO (nombre EXACTO, en mayúsculas):
+
+   Nombre                  Valor que pegas
+   ─────────────────────   ──────────────────────────────────────────
+   TEAM_ID                 los 10 caracteres del Team ID
+   APPSTORE_ISSUER_ID      el Issuer ID largo con guiones
+   APPSTORE_KEY_ID         los 10 caracteres del Key ID
+   APPSTORE_API_KEY_P8     el texto base64 del .p8 (el del portapapeles)
+
+Los otros dos secretos —APP_OA_KEY y APP_EL_KEY, tus llaves de OpenAI y
+ElevenLabs— YA los dejé creados: la app del iPhone las llevará dentro para que
+funcione sola, igual que en el computador, sin que nadie configure nada.
+
+
+────────────────────────────────────────────────────────────────────
+PASO 4 — CREAR LA APP EN APP STORE CONNECT  (una sola vez, 2 minutos)
+────────────────────────────────────────────────────────────────────
+1. appstoreconnect.apple.com/apps  →  botón "+"  →  "New App".
+2. Rellena:
+   - Platforms: iOS
+   - Name: LA FRAGUA   (si está tomado, prueba "LA FRAGUA Studio")
+   - Primary Language: Spanish
+   - Bundle ID: elige  com.jeyjey011.lafragua
+     (si no aparece en la lista, créalo antes en
+      developer.apple.com/account/resources/identifiers → "+", el mismo texto)
+   - SKU: cualquier código tuyo, ej.  lafragua01
+3. Crear.
+
+
+────────────────────────────────────────────────────────────────────
+PASO 5 — CONSTRUIR Y SUBIR  (el botón mágico)
+────────────────────────────────────────────────────────────────────
+1. Entra a  github.com/Jeyjey011/lafragua/actions
+2. En la izquierda, elige el workflow  "iOS".
+3. Botón "Run workflow"  →  "Run workflow" (rama main).
+4. Espera ~15 minutos. El Mac de la nube compila, firma con tu cuenta y sube.
+
+Cuando termine en verde, entra a
+   appstoreconnect.apple.com  →  tu app  →  pestaña "TestFlight".
+La versión aparecerá "Processing" unos minutos y luego lista.
+
+
+────────────────────────────────────────────────────────────────────
+PASO 6 — INSTALARLA EN LOS TELÉFONOS
+────────────────────────────────────────────────────────────────────
+1. En TestFlight, sección "Internal Testing" o "External", agrega correos, o
+   crea un "Public Link" — un enlace que le mandas a quien quieras.
+2. Esa persona instala la app gratis "TestFlight" de la App Store, abre tu
+   link, y ahí instala LA FRAGUA.
+3. Se abre como cualquier app. Funciona con el cerebro compartido igual que en
+   el computador.
+
+Cada vez que quieras una versión nueva en los teléfonos: repites solo el PASO 5.
+
+
+────────────────────────────────────────────────────────────────────
+SI ALGO FALLA
+────────────────────────────────────────────────────────────────────
+- El workflow "iOS" se pone rojo: entra a la corrida, abre el paso que falló y
+  mándame el texto del error. Casi siempre es un secreto mal pegado o el Bundle
+  ID que no coincide.
+- "Invalid API Key": el .p8 se pegó a medias, o el Key ID no corresponde a esa
+  clave. Vuelve a generar la clave (paso 2) y repite.
+- La primera vez, Apple puede tardar en "Processing" hasta una hora. Es normal.
+
+Todo lo demás —el código, la firma automática, la inyección de tus llaves,
+el cerebro— ya está montado y probado. Tú solo haces los pasos de Apple.
