@@ -1,0 +1,34 @@
+# Receta para XcodeGen: con esto el runner de macOS crea el .xcodeproj solo.
+# Es lo que evita necesitar un Mac para empezar — sin esto haria falta abrir
+# Xcode una vez para generar el proyecto, y ahi se rompe todo el plan.
+name: LaFragua
+
+options:
+  bundleIdPrefix: com.lafragua
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  LaFragua:
+    type: application
+    platform: iOS
+    sources:
+      - path: LaFragua
+        excludes:
+          - "Info.plist"
+          - "logo-para-icono.png"
+    settings:
+      base:
+        # CAMBIA ESTO por algo tuyo y unico, con tu dominio al reves.
+        PRODUCT_BUNDLE_IDENTIFIER: com.jeyjey011.lafragua
+        PRODUCT_NAME: LaFragua
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: LaFragua/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1"          # solo iPhone
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
