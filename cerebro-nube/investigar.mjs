@@ -4,9 +4,10 @@
 // gist). Cada app, al abrir, ve la fecha nueva y AVISA al usuario sola.
 // Las llaves llegan por secretos cifrados del repositorio — nunca están aquí.
 
-const ANTHROPIC = process.env.ANTHROPIC_API_KEY;
-const TOKEN = process.env.CEREBRO_TOKEN;
-const GIST = process.env.CEREBRO_GIST;
+const limpiar = v => String(v || '').replace(/FEFF/g, '').trim();
+const ANTHROPIC = limpiar(process.env.ANTHROPIC_API_KEY);
+const TOKEN = limpiar(process.env.CEREBRO_TOKEN);
+const GIST = limpiar(process.env.CEREBRO_GIST);
 if (!ANTHROPIC || !TOKEN || !GIST) { console.error('Faltan secretos.'); process.exit(1); }
 
 // GitHub exige User-Agent: sin esto responde 403 (aprendido a las malas en la 1.29.0).
