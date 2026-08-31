@@ -1,0 +1,21 @@
+# El cerebro nocturno: corre SOLO, cada noche a las 3am de Colombia (8:00 UTC).
+# Investiga en internet y escribe lo aprendido en el cerebro compartido.
+# workflow_dispatch existe únicamente para poder probarlo — el modo normal es el cron.
+name: cerebro-nocturno
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch: {}
+permissions: {}
+jobs:
+  investigar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Investigar y actualizar el cerebro
+        run: node cerebro-nube/investigar.mjs
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CEREBRO_TOKEN: ${{ secrets.CEREBRO_TOKEN }}
+          CEREBRO_GIST: ${{ secrets.CEREBRO_GIST }}
