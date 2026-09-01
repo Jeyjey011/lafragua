@@ -10719,6 +10719,20 @@ async function generarIdeas(){
                     'tienen que sostener esa emoción, no ir por otro lado. Dilo también en "por_que_engancha".' : '';
       })() +
       loQueYaSabemos() + comoLeGusta() +
+      // EL AVATAR ELEGIDO MANDA (pedido del usuario): si el paso 1 generó un
+      // avatar, las 6 ideas protagonizan a ESE avatar — su dolor, su miedo, lo
+      // que ya probó, lo que quiere sentir — no a un personaje genérico. Vale
+      // para todos los estilos.
+      (function(){
+        const av = state.animado.step1 && state.animado.step1.avatar;
+        if(!av || !Object.keys(av).length) return '';
+        return '\n\nEL PROTAGONISTA DE LAS 6 IDEAS ES ESTE AVATAR YA ELEGIDO — no inventes otro, ' +
+               'no lo cambies: cada idea es la historia de esta misma persona, nacida de SU dolor y SU miedo:\n' +
+               JSON.stringify(av) +
+               '\nEl hook sale de uno de sus dolores concretos; el miedo profundo es lo que está en juego; ' +
+               'el vuelco es que por fin siente lo que quería sentir. Si el estilo es de frutas, esta persona ' +
+               'se representa como la fruta que mejor encarna su dolor, pero sigue siendo ESTE avatar.';
+      })() +
       (yaVistas.length ? '\n\nYA PROPUSISTE ESTAS, no las repitas ni las disfraces:\n- ' + yaVistas.join('\n- ') : '');
     const raw = await callClaude(SYSTEM_PROMPT_ANIMADO, userContent, 32000);
     const parsed = parseJsonLoose(raw);
