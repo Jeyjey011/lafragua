@@ -5569,7 +5569,8 @@ async function generarImagenPlan(im){
   let text = preEl ? preEl.textContent : (im.code_block||'');
   if(im.necesita_foto_producto) text = forzarProducto(text, deProducto.length);
   await runGen(genId, 'imagen', async (setStatus)=>{
-    let url = await generarImagenEnCadena(text, refs, '9:16', setStatus, pasosSegunCoste(refs));
+    // Ruteo por TIPO: producto→OpenAI, antes/después agresivo→APImart, derivada→OpenAI.
+    let url = await generarImagenEnCadena(text, refs, '9:16', setStatus, pasosParaImagen(im, refs));
     if(im.necesita_foto_producto) url = await asegurarProducto(url, setStatus);
     state.animado.imagenes[im.id] = url;
     saveSession();
@@ -7016,6 +7017,40 @@ function pasosSegunCoste(refs){
     : [{prov:'apimart',modelo:''},{prov:'wavespeed',modelo:''},{prov:'openai',modelo:''}];
 }
 
+const AM_PRIMERO = [{prov:'apimart',modelo:''},{prov:'wavespeed',modelo:''},{prov:'openai',modelo:''}];
+const OA_PRIMERO = [{prov:'openai',modelo:''},{prov:'apimart',modelo:''},{prov:'wavespeed',modelo:''}];
+
+/// ¿Esta imagen es un antes/después agresivo o sin censura? OpenAI las rechaza,
+/// así que van a APImart primero AUNQUE tengan referencia.
+function esImagenSinCensura(im){
+  const t = ((im && (im.titulo||'')) + ' ' + (im && (im.para_que||'')) + ' ' +
+             (im && (im.code_block||'')) + ' ' + (im && (im.grupo||''))).toLowerCase()
+             .normalize('NFD').replace(/[̀-ͯ]/g,'');
+  // marca de antes/después
+  const esAntesDespues = /\bantes\b|\bdespues\b|before|after|transformacion|split|lado a lado/.test(t);
+  // vocabulario agresivo de cuerpo (los antes raquíticos y los después exagerados)
+  const cuerpoAgresivo = /raquitic|esqueletic|huesud|sin busto|pecho plano|plana|rollos|michelin|papada|barriga|obes|gorda|celulit|estrias|flacid|gluteo|nalga|cintura|cadera|busto|senos|curvas|esbelt|voluptuos|body|desnud|nude|lenceri|bikini|escote|sensual|provocativ/.test(t);
+  const explicito = /sin censura|uncensored|explicit|nsfw/.test(t);
+  return explicito || (esAntesDespues && cuerpoAgresivo) || (im && im.sin_censura === true);
+}
+
+/// El ruteo por TIPO de imagen, pedido del usuario:
+///  · producto  → OpenAI (fiel al envase, barato)
+///  · antes/después agresivo o sin censura → APImart (OpenAI los bloquea)
+///  · secundaria derivada de otra imagen del plan → OpenAI (edición fiel)
+///  · lo demás → por costo (con ref OpenAI, desde cero APImart)
+function pasosParaImagen(im, refs){
+  if(im && (im.necesita_foto_producto || im.grupo === 'PRODUCTO')) return OA_PRIMERO;
+  // Si el botón 🔥 reescribió ESTA imagen a intensa/sin censura, va a APImart.
+  const genId = im && im.id ? ('plan-' + im.id) : '';
+  if((state.promptsIntensos || {})[genId]) return AM_PRIMERO;
+  if(esImagenSinCensura(im)) return AM_PRIMERO;
+  const derivaDeOtras = im && Array.isArray(im.ref_de) &&
+    im.ref_de.some(id => id && id !== 'PRODUCTO-ESTILO');
+  if(derivaDeOtras) return OA_PRIMERO;
+  return pasosSegunCoste(refs);
+}
+
 async function generarImagenEnCadena(prompt, refs, aspecto, setStatus, pasosForzados){
   if(esDelModoAnimado()) prompt = forzarEstilo(prompt);
   const pasos = (pasosForzados || leerCadena('fragua_cadena_imagen', CADENA_IMAGEN_DEFECTO)).filter(p=>hayLlavePara(p.prov));
@@ -7184,7 +7219,7 @@ function renderTomasFinales(escenas){
       const voiceId = (document.getElementById('vozIdAnimado').value.trim() || VOZ_OFF_POR_DEFECTO);
       return runGen('voz-'+n, 'audio',
         (setStatus)=>{ setStatus(' generando la locución...'); return wsGenerateAudioElevenLabs(texto, voiceId); },
-        null, 'Voz ' + n + ' - ' + resumen);
+        null, 'voz ' + n);
     };
     const bEmo = document.querySelector(`[data-emocionar="${n}"]`);
     if(bEmo) bEmo.onclick = async ()=>{
@@ -7269,7 +7304,7 @@ function renderTomasFinales(escenas){
       const segs = parseInt((document.getElementById('dur-'+n)||{}).value || (e.duracion_seg||5), 10);
       return runGen('vid-'+n, 'video',
         (setStatus)=>generarVideoEnCadena(texto, refs, '9:16', setStatus, segs),
-        null, 'Toma ' + n + ' - ' + resumen);
+        null, 'toma ' + n);
     };
     const cp = document.querySelector(`[data-copy-vid="${n}"]`);
     if(cp) cp.onclick = ()=>copyText(document.getElementById('vidtxt-'+n).textContent, 'Prompt de la toma '+n);
