@@ -5568,6 +5568,9 @@ async function generarImagenPlan(im){
   const preEl = document.getElementById('planpre-'+im.id);
   let text = preEl ? preEl.textContent : (im.code_block||'');
   if(im.necesita_foto_producto) text = forzarProducto(text, deProducto.length);
+  // El cuerpo femenino se fuerza en toda imagen que NO sea solo el producto: el
+  // después sexy sin músculos en brazos/hombros/espalda, salga bien siempre.
+  else text = forzarCuerpoFemenino(text);
   await runGen(genId, 'imagen', async (setStatus)=>{
     // Ruteo por TIPO: producto→OpenAI, antes/después agresivo→APImart, derivada→OpenAI.
     let url = await generarImagenEnCadena(text, refs, '9:16', setStatus, pasosParaImagen(im, refs));
@@ -7020,18 +7023,92 @@ function pasosSegunCoste(refs){
 const AM_PRIMERO = [{prov:'apimart',modelo:''},{prov:'wavespeed',modelo:''},{prov:'openai',modelo:''}];
 const OA_PRIMERO = [{prov:'openai',modelo:''},{prov:'apimart',modelo:''},{prov:'wavespeed',modelo:''}];
 
+/// La regla de oro del cuerpo femenino, forzada EN CÓDIGO al generar — igual que
+/// el estilo o el producto. Pedido del usuario: el después de una mujer es sexy
+/// y femenino, NUNCA musculoso; la definición va solo en abdomen, mandíbula,
+/// piernas, glúteos y senos, jamás en brazos, hombros ni espalda.
+const REGLA_CUERPO_FEMENINO =
+  'FEMALE BODY LOCK: the subject is a woman. Her body stays FEMININE and sexy, never muscular. ' +
+  'ABSOLUTELY NO added muscle, bulk, veins or definition on arms, shoulders, back, traps or neck — ' +
+  'keep arms slim, soft, smooth and feminine at all times. The entire transformation shows ONLY as: ' +
+  'a flat toned defined abdomen, a sharp feminine jawline, toned shapely legs, large round lifted ' +
+  'glutes, and fuller firmer breasts. Curvy hourglass silhouette of a sexy fitness model / instagram ' +
+  'baddie — NEVER a female bodybuilder, never broad shoulders, never a masculine frame.';
+
+/// La POSE — pedido del usuario: ella se sostiene cada zona con las manos y hace
+/// una risa picarona. Va en FOTO y en video: las manos enmarcando cada zona
+/// ayudan a que la anatomía no se deforme. (La pose es una imagen; sirve igual
+/// para el frame y para el video.)
+const REGLA_POSE_CUERPO =
+  'POSE: she strikes a confident, playful pose with a mischievous flirty little smile, ' +
+  'resting and cupping her hands over each area — waist, hips, glutes — framing and holding them; ' +
+  'this keeps the anatomy stable, shapely and consistent. Feminine, confident and sexy, never crude.';
+
+/// El MOVIMIENTO — solo en VIDEO: al recorrer la cámara el cuerpo, cada zona
+/// rebota suave y sexy (glúteos, senos), con una risa picarona.
+const REGLA_MOVIMIENTO_CUERPO =
+  'BODY MOTION: as the camera slowly pans and glides over her body, the curves move with soft ' +
+  'natural physics — her glutes and breasts have a subtle sexy jiggle and bounce as she moves, ' +
+  'and she gives a soft confident flirty little laugh. Sexy and playful, never crude or explicit.';
+
+/// ¿El sujeto de este prompt es una mujer? (para aplicarle las reglas).
+function pareceFemenino(txt){
+  const s = String(txt||'').toLowerCase();
+  return /\b(woman|women|female|girl|lady|she|her|mujer|chica|ella|femenin|glute|nalga|busto|seno|cintura|curvas|vestido|blusa|falda)\b/.test(s);
+}
+/// ¿Este prompt MUESTRA el cuerpo? (para la pose). Cara sola no cuenta.
+function muestraCuerpo(txt){
+  const s = String(txt||'').toLowerCase();
+  return /\bbody|cuerpo|curves|curvas|glute|nalga|waist|cintura|hips|cadera|silhouette|silueta|full body|de cuerpo|busto|seno\b/.test(s);
+}
+/// ¿La cámara RECORRE el cuerpo? (para el rebote, que necesita movimiento).
+function hayRecorridoCamara(txt){
+  const s = String(txt||'').toLowerCase();
+  return /\bpan\b|pans|glide|tilt|reveal|revela|recorr|dolly|tracking|zoom/.test(s);
+}
+
+/// FOTO: SOLO el candado del cuerpo femenino (brazos/hombros/espalda sin músculo).
+/// La pose y el rebote son cosa del VIDEO, no de la foto. El antes exagerado
+/// (plana, flaca, senos caídos) lo maneja la descripción del storyboard, no esto.
+function forzarCuerpoFemenino(prompt){
+  let p = String(prompt == null ? '' : prompt);
+  if(!pareceFemenino(p)) return p;
+  if(p.indexOf('FEMALE BODY LOCK') >= 0) return p;
+  return p + '\n\n' + REGLA_CUERPO_FEMENINO;
+}
+/// VIDEO: candado del cuerpo + la pose (manos sosteniendo cada zona, risa
+/// picarona) si muestra el cuerpo + el rebote si la cámara lo recorre.
+/// Todo decidido sobre el original antes de añadir nada.
+function forzarVideoFemenino(texto){
+  let p = String(texto == null ? '' : texto);
+  if(!pareceFemenino(p)) return p;
+  const conCuerpo = muestraCuerpo(p);
+  const recorre = conCuerpo && hayRecorridoCamara(p);
+  if(p.indexOf('FEMALE BODY LOCK') < 0) p += '\n\n' + REGLA_CUERPO_FEMENINO;
+  if(conCuerpo && p.indexOf('POSE:') < 0) p += '\n' + REGLA_POSE_CUERPO;
+  if(recorre && p.indexOf('BODY MOTION') < 0) p += '\n' + REGLA_MOVIMIENTO_CUERPO;
+  return p;
+}
+
 /// ¿Esta imagen es un antes/después agresivo o sin censura? OpenAI las rechaza,
 /// así que van a APImart primero AUNQUE tengan referencia.
 function esImagenSinCensura(im){
   const t = ((im && (im.titulo||'')) + ' ' + (im && (im.para_que||'')) + ' ' +
              (im && (im.code_block||'')) + ' ' + (im && (im.grupo||''))).toLowerCase()
              .normalize('NFD').replace(/[̀-ͯ]/g,'');
-  // marca de antes/después
-  const esAntesDespues = /\bantes\b|\bdespues\b|before|after|transformacion|split|lado a lado/.test(t);
-  // vocabulario agresivo de cuerpo (los antes raquíticos y los después exagerados)
-  const cuerpoAgresivo = /raquitic|esqueletic|huesud|sin busto|pecho plano|plana|rollos|michelin|papada|barriga|obes|gorda|celulit|estrias|flacid|gluteo|nalga|cintura|cadera|busto|senos|curvas|esbelt|voluptuos|body|desnud|nude|lenceri|bikini|escote|sensual|provocativ/.test(t);
+  // Vocabulario agresivo/sensual de cuerpo, en ESPAÑOL e INGLÉS: un cuerpo sexy
+  // marcado —el antes raquítico o el después exagerado— OpenAI lo bloquea, así
+  // que basta con que aparezca para mandarlo a APImart (no hace falta la palabra
+  // "antes/después"). El envase de producto ya se filtró antes en pasosParaImagen.
+  const cuerpoAgresivo = new RegExp(
+    'raquitic|esqueletic|huesud|sin busto|pecho plano|plana|rollos|michelin|papada|barriga|obes|gorda|' +
+    'celulit|estrias|flacid|gluteo|nalga|cintura|cadera|busto|senos|curvas|esbelt|voluptuos|desnud|' +
+    'lenceri|escote|sensual|provocativ|' +
+    'glute|butt|booty|curves|curvy|waist|hips|thigh|cleavage|busty|thick|toned abs|abs\\b|bikini|' +
+    'lingerie|nude|voluptuous|hourglass|body reveal|full body|female body'
+  ).test(t) || /female body lock/i.test((im && im.code_block) || '');
   const explicito = /sin censura|uncensored|explicit|nsfw/.test(t);
-  return explicito || (esAntesDespues && cuerpoAgresivo) || (im && im.sin_censura === true);
+  return explicito || cuerpoAgresivo || (im && im.sin_censura === true);
 }
 
 /// El ruteo por TIPO de imagen, pedido del usuario:
@@ -7103,6 +7180,68 @@ function imagenDeEscena(numero){
   return inicial ? state.animado.imagenes[inicial.id] : null;
 }
 
+/// EL BOTÓN "CREAR TODO DE UNA" — pedido del usuario.
+/// Genera en orden todo lo que falte: primero las imágenes del plan (con sus
+/// reglas de producto y cuerpo femenino), luego la voz de cada toma, luego el
+/// video. Lo ya generado se salta (no se repite ni se cobra). Si algo falla, se
+/// detiene ahí y lo dice, sin perder lo hecho.
+let _crearTodoCorriendo = false;
+async function crearTodoDeUna(escenas){
+  if(_crearTodoCorriendo) return;
+  _crearTodoCorriendo = true;
+  const st = document.getElementById('crearTodoStatus');
+  const btn = document.getElementById('btnCrearTodo');
+  const decir = t => { if(st) st.textContent = t; };
+  if(btn) btn.disabled = true;
+  try{
+    // 1) Todas las imágenes del plan primero (las tomas las usan de referencia).
+    if(state.animado.step9 && state.animado.step9.imagenes && state.animado.step9.imagenes.length){
+      decir('🖼️ Generando las imágenes que falten...');
+      await generarTodoElPlan();
+    }
+    // 2) Voz de cada toma, luego su video. En orden.
+    const tomas = escenas || state.animado.tomas || [];
+    let vozHechas = 0, vidHechos = 0, fallo = null;
+    for(let i=0; i<tomas.length; i++){
+      const n = tomas[i].numero || (i+1);
+      const gen = state.generados || {};
+      // Voz
+      if(!gen['voz-'+n] || !gen['voz-'+n].url){
+        const bVoz = document.querySelector(`[data-gen="voz-${n}"]`);
+        const texto = ((document.getElementById('voztxt-'+n)||{}).value||'').trim();
+        if(bVoz && texto){
+          decir(`🎙️ Voz ${n} de ${tomas.length}...`);
+          try{ await bVoz.onclick(); }catch(e){}
+          if(!(state.generados||{})['voz-'+n]){ fallo = 'la voz '+n; break; }
+          vozHechas++;
+        }
+      }
+      // Video
+      if(!gen['vid-'+n] || !gen['vid-'+n].url){
+        const bVid = document.querySelector(`[data-gen="vid-${n}"]`);
+        if(bVid){
+          decir(`🎬 Video de la toma ${n} de ${tomas.length}... (esto tarda)`);
+          try{ await bVid.onclick(); }catch(e){}
+          if(!(state.generados||{})['vid-'+n]){ fallo = 'el video de la toma '+n; break; }
+          vidHechos++;
+        }
+      }
+    }
+    if(fallo){
+      decir(`⚠️ Me detuve en ${fallo}. Lo demás quedó hecho: revisa esa toma, arréglala y vuelve a darle a Crear TODO — lo ya hecho no se repite.`);
+    }else{
+      decir(`✅ Listo: todo generado. ${vozHechas} voces y ${vidHechos} videos nuevos. Ya puedes montar el video final.`);
+      try{ sonarYunque(); }catch(e){}
+      if(document.hidden) avisarEnElTelefono('Todo listo', 'Se generaron todas las imágenes, voces y videos del proyecto.');
+    }
+  }catch(err){
+    decir('⚠️ ' + err.message);
+  }finally{
+    _crearTodoCorriendo = false;
+    if(btn) btn.disabled = false;
+  }
+}
+
 function armarTomasFinales(){
   const escenas = mejorStoryboard();
   if(!escenas.length){ toast('Genera antes el storyboard (paso 5)'); return; }
@@ -7118,7 +7257,13 @@ function renderTomasFinales(escenas){
   // ninguna toma. Antes simplemente desaparecían de la pantalla.
   const sueltos = videosHuerfanos();
   const hayHuerfanos = sueltos.length > 0;
-  let html = `<p class="hint">Cada toma en el orden del guion. El texto de la voz en off y el prompt de video son editables: corrige lo que haga falta antes de generar.</p>`;
+  let html = `<p class="hint">Cada toma en el orden del guion. El texto de la voz en off y el prompt de video son editables: corrige lo que haga falta antes de generar.</p>
+  <div class="card" style="border-color:var(--brand);">
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <button class="btn primary" id="btnCrearTodo">🚀 Crear TODO de una</button>
+      <span class="toolkit-note" id="crearTodoStatus">Genera lo que falte en orden: primero las imágenes, luego las voces, luego los videos. Lo ya hecho no se repite ni se cobra. Puedes seguir editando mientras avanza.</span>
+    </div>
+  </div>`;
   if(hayHuerfanos){
     html += `<div class="nota-desfase">Hay <b>${sueltos.length} ${sueltos.length===1?'video generado':'videos generados'}</b> que no encajan en ninguna toma de este guion — se hicieron cuando las escenas iban numeradas de otra forma. No se han perdido: en cada toma tienes <b>♻️ Usar uno ya generado</b> para colocarlos.</div>`;
   }
@@ -7208,6 +7353,8 @@ function renderTomasFinales(escenas){
     </div>`;
   }).join('');
   document.getElementById('tomasFinalesResult').innerHTML = html;
+  const btnTodo = document.getElementById('btnCrearTodo');
+  if(btnTodo) btnTodo.onclick = ()=>crearTodoDeUna(escenas);
 
   escenas.forEach((e,i)=>{
     const n = e.numero || i+1;
@@ -7300,6 +7447,8 @@ function renderTomasFinales(escenas){
       }
       const extra = ((document.getElementById('vidextra-'+n)||{}).value || '').trim();
       if(extra) texto = texto + '\n' + extra;
+      // Cuerpo femenino + movimiento sexy (rebote y manos) si la toma revela el cuerpo.
+      texto = forzarVideoFemenino(texto);
       const refs = refsMarcadasToma(n);
       const segs = parseInt((document.getElementById('dur-'+n)||{}).value || (e.duracion_seg||5), 10);
       return runGen('vid-'+n, 'video',
@@ -9410,7 +9559,18 @@ function comoEsElAntesYDespues(){
     'convertirse en otra persona ni en una caricatura. El antes tiene que ser de verdad flojo — si ' +
     'en la primera imagen ya se ve bien, el cambio no existe y el anuncio no vende.\n' +
     'Misma persona, mismo encuadre, misma luz y misma ropa en las dos: lo único que cambia es lo que ' +
-    'el producto promete.\n';
+    'el producto promete.\n' +
+    'SI EL PERSONAJE ES MUJER — regla de oro del después, NUNCA la rompas: el cuerpo se mantiene ' +
+    'FEMENINO y sexy, jamás musculoso. PROHIBIDO ponerle músculo, bulto, venas o definición en ' +
+    'brazos, hombros, espalda o trapecios: brazos delgados, suaves y femeninos siempre. Toda la ' +
+    'transformación se ve SOLO en: abdomen plano y marcado, mandíbula femenina definida, piernas ' +
+    'torneadas, glúteos grandes, redondos y levantados, y senos más llenos y firmes. Silueta de ' +
+    'modelo fitness / influencer sexy, JAMÁS una fisicoculturista.\n' +
+    'EL ANTES VA IGUAL DE EXAGERADO, hacia el otro extremo, según lo que prometa el producto: si es ' +
+    'flaca, es RAQUÍTICA — flaca de palo, huesos marcados, pecho totalmente plano, sin curvas, sin ' +
+    'glúteos; si es de senos, los senos van MUY caídos, vacíos y arrugados; si es peso, papada, ' +
+    'rollos y barriga marcadísimos; si es piel, el defecto al máximo. El antes tiene que dar casi ' +
+    'lástima para que el después impacte — sin quedarse a medias.\n';
 }
 
 // Qué promete este producto, deducido de su ficha.
