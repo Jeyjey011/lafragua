@@ -7559,7 +7559,13 @@ function renderTomasFinales(escenas){
     if(emo && emo.tag && voz.trim() && voz.indexOf(emo.tag) < 0) voz = emo.tag + ' ' + voz.trim();
     const desc = e.que_pasa || e.descripcion_es || '';
     const img = imagenDeEscena(n);
+    // El sujeto y el entorno EN INGLÉS van delante: los modelos de video
+    // entienden mucho mejor el inglés, y la descripción en español se quedaba
+    // como la única fuente de lo que se ve. La versión en español se conserva
+    // debajo para que tú la leas y la puedas editar.
     const promptVideo = [
+      e.subject_en ? ('Subject: ' + e.subject_en) : '',
+      e.environment_en ? ('Scene: ' + e.environment_en) : '',
       desc,
       e.action_en ? ('Action: ' + e.action_en) : '',
       emo ? ('Emotion: the character is ' + emo.en) : '',
@@ -7625,6 +7631,7 @@ function renderTomasFinales(escenas){
       </div>
       <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
         <button class="btn small" data-gen="vid-${n}">🎬 Generar video</button>
+        <button class="btn small" data-ver-final="${n}" title="Enseña el texto EXACTO que se le manda al proveedor, con todas las reglas ya aplicadas. No cuesta nada.">👁️ Ver lo que se manda</button>
         <button class="btn small" data-copy-vid="${n}">📋 Copiar prompt</button>
         <button class="btn small" data-vid-archivo="${n}">📁 Poner uno del PC</button>
         <button class="btn small" data-vid-url="${n}">🔗 Poner una URL</button>
@@ -7736,6 +7743,36 @@ function renderTomasFinales(escenas){
       return runGen('vid-'+n, 'video',
         (setStatus)=>generarVideoEnCadena(texto, refs, '9:16', setStatus, segs),
         null, 'toma ' + n);
+    };
+    // Ver el texto EXACTO que se manda, con todas las reglas ya aplicadas.
+    // Así nunca se paga a ciegas: se revisa antes de darle a generar.
+    const bVer = document.querySelector(`[data-ver-final="${n}"]`);
+    if(bVer) bVer.onclick = ()=>{
+      let texto = document.getElementById('vidtxt-'+n).textContent;
+      const modo = ((document.getElementById('modohabla-'+n)||{}).value) || 'off';
+      const dialogoManual = ((document.getElementById('dialogo-'+n)||{}).value || '').trim();
+      const dicho = (dialogoManual || ((document.getElementById('voztxt-'+n)||{}).value || '')).replace(/\[[^\]]+\]/g,'').trim();
+      if(modo === 'habla' && dicho){
+        texto += '\nThe character speaks these exact words to camera, lips synced, natural mouth movement: "' + dicho + '"';
+      }else{
+        texto += '\nThe character does NOT speak: mouth closed or natural idle expression, no lip movement, no talking.';
+      }
+      const extra = ((document.getElementById('vidextra-'+n)||{}).value || '').trim();
+      if(extra) texto = texto + '\n' + extra;
+      texto = forzarVideoFemenino(texto);
+      const guardaId = _currentGenId; _currentGenId = 'vid-'+n;
+      if(esDelModoAnimado()) texto = forzarEstilo(texto);
+      _currentGenId = guardaId;
+      if(texto.toLowerCase().indexOf('single continuous take') < 0) texto += '\n' + TOMA_CONTINUA;
+      const refs = refsMarcadasToma(n);
+      const esAntes = esTomaAntes(texto);
+      mostrarAvisoModal('👁️ Esto es lo que se le manda al proveedor',
+        '<div class="es-explain">Toma ' + n + ' · ' + refs.length + ' ' +
+        (refs.length===1?'imagen de referencia':'imágenes de referencia') +
+        (esAntes ? ' · <b>detectada como toma del ANTES</b> (se le prohíben las curvas)' : '') +
+        '</div><pre class="prompt-block" style="max-height:52vh; overflow:auto; white-space:pre-wrap;">' +
+        escapeHtml(texto) + '</pre>',
+        [{id:'ok', texto:'Entendido', principal:true}]);
     };
     const cp = document.querySelector(`[data-copy-vid="${n}"]`);
     if(cp) cp.onclick = ()=>copyText(document.getElementById('vidtxt-'+n).textContent, 'Prompt de la toma '+n);
