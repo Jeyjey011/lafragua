@@ -1748,7 +1748,11 @@ footer.app-footer{text-align:center; padding:30px 0 50px; color:var(--steel); fo
       <div class="field" id="vBloqueCreativo">
         <label>Creativo base — el estático del que quieres sacar variaciones</label>
         <div id="vCreativoChips"></div>
-        <input type="text" id="vCreativoUrl" placeholder="O pega aquí la URL del creativo" style="margin-top:8px;">
+        <div style="display:flex; gap:6px; margin-top:8px;">
+          <input type="text" id="vCreativoUrl" placeholder="O pega aquí la URL del creativo" style="flex:1;">
+          <button class="btn small" id="btnCreativoPC">📁 del PC</button>
+        </div>
+        <small class="help">Elige el creativo de tu PC y las variaciones las hará OpenAI, fiel al original. Los antes/después sin censura van a APImart solos.</small>
       </div>
       <div class="grid3">
         <div class="field">
@@ -1777,6 +1781,13 @@ footer.app-footer{text-align:center; padding:30px 0 50px; color:var(--steel); fo
         </div>
       </div>
       <button class="btn primary" id="btnVariaciones">🔁 Sacar variaciones</button>
+
+      <div class="card" style="border-color:var(--brand); margin-top:14px;">
+        <h4><span class="title-txt">⚡ Creativo ANTES/DESPUÉS de un clic</span>
+          <button class="btn small" id="btnCreativoBA">Armarlo con las fotos del banco</button></h4>
+        <div class="es-explain">Toma una foto del <b>antes</b> y una del <b>después</b> del banco de este producto y arma el creativo de comparación con tu fórmula, en 9:16 y 1:1. Guarda antes las fotos en la ficha (arriba).</div>
+        <div id="baResult" style="margin-top:8px;"></div>
+      </div>
       <div id="vResult" style="margin-top:14px;"></div>
     </div>
 
@@ -6355,6 +6366,36 @@ function guardarImagenGanadora(url){
   state.assets['ganadora_'+p.ganadoras.length] = url;
   try{ refreshAllRefChips(); }catch(e){}
   toast('Guardada como ganadora en "' + (p.nombre||'el producto') + '" — la usará de referencia en nuevos creativos');
+  // Aprender del envase: si la ficha no tiene descripción física del producto,
+  // el cerebro mira la imagen y la completa sola, para los próximos creativos.
+  if(state.apiKey && !(p.descripcion_fisica||'').trim()){
+    detectarProductoEnImagen(url, i);
+  }
+}
+
+/// El cerebro mira una imagen ganadora y, si ve el producto, describe su envase
+/// (colores, forma, etiqueta) y lo guarda en la ficha — así los próximos
+/// creativos lo reproducen fiel sin que el usuario lo escriba.
+async function detectarProductoEnImagen(url, indiceProducto){
+  try{
+    const sistema = 'Miras una imagen de un anuncio y describes el ENVASE del producto que aparece, ' +
+      'si hay uno claro: colores, forma del recipiente, etiqueta, nombre visible, tipografía. ' +
+      'Responde SOLO un JSON {"hay_producto":true|false,"descripcion_fisica":"1-2 líneas, concreto y visual, o vacío"}. ' +
+      'Si no hay un producto claro (solo una persona, un cuerpo), hay_producto=false.';
+    const v = parseJsonLoose(await callClaude(sistema, 'Describe el envase del producto en esta imagen.', 500, [url])) || {};
+    if(v.hay_producto && (v.descripcion_fisica||'').trim()){
+      const p = state.productos[indiceProducto];
+      if(p && !(p.descripcion_fisica||'').trim()){
+        p.descripcion_fisica = v.descripcion_fisica.trim();
+        guardarProductos();
+        // si es el producto abierto en la ficha, refléjalo en pantalla
+        if(state.productoActivo === indiceProducto){
+          const campo = document.getElementById('vFisica'); if(campo) campo.value = p.descripcion_fisica;
+        }
+        toast('El cerebro leyó el envase de la imagen y completó la ficha del producto ✓');
+      }
+    }
+  }catch(e){}
 }
 function borrarFichaProducto(){
   const sel = document.getElementById('vProductoSel');
@@ -6387,6 +6428,58 @@ function renderVarRefs(){
     };
   });
 }
+/// CREATIVO ANTES/DESPUÉS DE UN CLIC — toma una foto del banco-antes y una del
+/// banco-después de este producto y arma el creativo de comparación con la
+/// fórmula, en 9:16 y 1:1. Las fotos reales van como referencia (bytes), así
+/// el modelo respeta a la persona; las sin censura van a APImart.
+async function crearCreativoAntesDespues(){
+  if(!requireApiKey()) return;
+  const antes = (_bancoFotos.antes||[]);
+  const despues = (_bancoFotos.despues||[]);
+  const cont = document.getElementById('baResult');
+  if(!antes.length || !despues.length){
+    if(cont) cont.innerHTML = '<div class="warn-row">Guarda al menos una foto de <b>antes</b> y una de <b>después</b> en el banco de arriba, y guarda el producto.</div>';
+    return;
+  }
+  const ficha = leerFichaProducto();
+  const btn = document.getElementById('btnCreativoBA');
+  if(btn) btn.disabled = true;
+  if(cont) cont.innerHTML = forjaHtml('el cerebro está armando el creativo antes/después...');
+  try{
+    const sistema = 'Eres director de arte de anuncios de transformación. Te doy la foto real del ANTES y la del ' +
+      'DESPUÉS de un cliente, y la ficha del producto. Arma UN creativo de comparación antes/después que venda, ' +
+      'con la fórmula: título que para el scroll, la comparación lado a lado clara (el cambio se lee en miniatura) ' +
+      'y un cierre con razón para comprar hoy. Devuelve SOLO un JSON ' +
+      '{"code_block_9x16":"prompt completo en inglés para el creativo vertical, que USE la Reference Image 1 como el antes y la Reference Image 2 como el después, conservando a la MISMA persona de las fotos","code_block_1x1":"lo mismo en cuadrado","titulo_es":"el título en español","cierre_es":"el cierre en español"}. ' +
+      'Reproduce a la persona EXACTA de las fotos, no la reinventes. El contraste antes→después es el argumento.';
+    const cuerpo = 'La Reference Image 1 es el ANTES, la Reference Image 2 es el DESPUÉS.\nFICHA:\n' +
+      JSON.stringify({nombre:ficha.nombre, angulo:ficha.angulo, descripcion:ficha.descripcion, cliente_ideal:ficha.cliente_ideal, precio_oferta:ficha.precio_oferta}) +
+      comoEsElAntesYDespues() + comoLeGusta();
+    const v = parseJsonLoose(await callClaude(sistema, cuerpo, 3000, [antes[0], despues[0]])) || {};
+    if(!v.code_block_9x16){ cont.innerHTML = '<div class="warn-row">No devolvió el creativo — reintenta.</div>'; return; }
+    state.creativoBA = {v: v, antes: antes[0], despues: despues[0]};
+    cont.innerHTML =
+      '<div class="es-explain"><b>Título:</b> ' + escapeHtml(v.titulo_es||'') + '</div>' +
+      '<div class="es-explain"><b>Cierre:</b> ' + escapeHtml(v.cierre_es||'') + '</div>' +
+      '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">' +
+        '<button class="btn small primary" data-gen="ba-9x16">🎬 Generar 9:16</button>' +
+        '<button class="btn small" data-gen="ba-1x1">⬛ Generar 1:1</button>' +
+        '<span class="toolkit-note" id="genstatus-ba-9x16"></span></div>' +
+      '<div id="genresult-ba-9x16" style="margin-top:6px;"></div>' +
+      '<div id="genresult-ba-1x1" style="margin-top:6px;"></div>';
+    [['ba-9x16','1:1'===false, v.code_block_9x16, '9:16'], ['ba-1x1', true, v.code_block_1x1||v.code_block_9x16, '1:1']].forEach(([id,_,texto,asp])=>{
+      const b = document.querySelector('[data-gen="'+id+'"]');
+      if(b) b.onclick = ()=>{
+        const refs = [state.creativoBA.antes, state.creativoBA.despues];
+        return runGen(id, 'imagen',
+          (setStatus)=>generarImagenEnCadena(texto, refs, asp, setStatus, pasosParaTexto(texto, refs)),
+          null, 'antes-despues ' + asp.replace(':','x'));
+      };
+    });
+  }catch(err){ cont.innerHTML = '<div class="warn-row">⚠️ '+escapeHtml(err.message)+'</div>'; }
+  finally{ if(btn) btn.disabled = false; }
+}
+
 function creativoBase(){
   const marcada = document.querySelector('[data-vchip]:checked');
   if(marcada) return state.assets[marcada.value];
@@ -6809,9 +6902,10 @@ function bindDobleFormato(idBase, refsExtra, etiquetas){
     if(g) g.onclick = ()=>{
       const texto = document.getElementById('pre-'+id).textContent;
       const refs = Array.from(new Set((refsExtra||[]).concat(leerRefsSeleccionadas(id, 'imagen')))).slice(0, maxRefsFor('imagen'));
-      // Cadena automática: OpenAI, reintento, y de ahí a WaveSpeed sin preguntar nada.
+      // Ruteo por contenido: las variaciones fieles a un creativo las hace OpenAI;
+      // los antes/después sin censura, APImart.
       return runGen(id, 'imagen',
-        (setStatus)=>generarImagenEnCadena(texto, refs, aspecto, setStatus),
+        (setStatus)=>generarImagenEnCadena(texto, refs, aspecto, setStatus, pasosParaTexto(texto, refs)),
         null, etiqueta);
     };
   });
@@ -7213,6 +7307,15 @@ function esImagenSinCensura(im){
 ///  · antes/después agresivo o sin censura → APImart (OpenAI los bloquea)
 ///  · secundaria derivada de otra imagen del plan → OpenAI (edición fiel)
 ///  · lo demás → por costo (con ref OpenAI, desde cero APImart)
+/// Ruteo cuando NO hay objeto de imagen del plan, solo el texto del prompt
+/// (variaciones, creativos). Mismo criterio: cuerpo sin censura → APImart;
+/// si hay referencia (deriva de un creativo/foto) → OpenAI fiel; si no, por costo.
+function pasosParaTexto(texto, refs){
+  if(esImagenSinCensura({code_block: String(texto||'')})) return AM_PRIMERO;
+  const conRef = (refs||[]).filter(Boolean).length > 0;
+  return conRef ? OA_PRIMERO : pasosSegunCoste(refs);
+}
+
 function pasosParaImagen(im, refs){
   if(im && (im.necesita_foto_producto || im.grupo === 'PRODUCTO')) return OA_PRIMERO;
   // Si el botón 🔥 reescribió ESTA imagen a intensa/sin censura, va a APImart.
@@ -11976,6 +12079,16 @@ window.addEventListener('DOMContentLoaded', ()=>{
   };
   document.getElementById('vProductoSel').onchange = (e)=>{ seleccionarProducto(e.target.value); };
   document.getElementById('btnVariaciones').onclick = generarVariaciones;
+  { const bba = document.getElementById('btnCreativoBA'); if(bba) bba.onclick = crearCreativoAntesDespues; }
+  { const bp = document.getElementById('btnCreativoPC'); if(bp) bp.onclick = async ()=>{
+      if(!window.fragua || !window.fragua.elegirArchivo){ toast('Elegir del PC solo en la app de escritorio — pega la URL'); return; }
+      try{ const r = await window.fragua.elegirArchivo('imagen'); if(!r || r.cancelado) return;
+        document.getElementById('vCreativoUrl').value = r.url;
+        // quitar la chip marcada para que gane el archivo del PC
+        const m = document.querySelector('[data-vchip]:checked'); if(m) m.checked = false;
+        toast('Creativo del PC puesto: ' + (r.nombre||''));
+      }catch(e){ toast('No se pudo: ' + e.message); }
+  }; }
   initPlegables();
   initPartidaVariaciones();
   cargarProductos();
