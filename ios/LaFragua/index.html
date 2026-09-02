@@ -141,7 +141,28 @@ main{max-width:1220px; margin:0 auto; padding:0 28px 100px;}
   align-items:center; justify-content:center;
   background:rgba(9,7,6,.72); backdrop-filter:blur(7px); -webkit-backdrop-filter:blur(7px);
 }
-.capa-carga.activa{display:flex;}
+.capa-carga.activa{display:flex; animation:fundeCapa .28s ease both;}
+.capa-carga.activa .tarjeta{animation:entraTarjeta .34s cubic-bezier(.2,.9,.25,1.1) both;}
+@keyframes fundeCapa{from{opacity:0; backdrop-filter:blur(0);} to{opacity:1;}}
+@keyframes entraTarjeta{from{opacity:0; transform:translateY(18px) scale(.965);} to{opacity:1; transform:none;}}
+
+/* El veredicto del arreglo de prompt: ANTES en frío, DESPUÉS en caliente. */
+.revision-toma, .revision-toma *{text-align:left;}
+.revision-toma .marca{text-align:left;}
+.veredicto{display:flex; align-items:center; gap:14px; padding:14px 16px; border-radius:12px; margin-bottom:14px;
+  border:1px solid var(--border); text-align:left; animation:entraTarjeta .4s .06s cubic-bezier(.2,.9,.25,1.1) both;}
+.veredicto .marca{font-family:'Oswald',sans-serif; text-transform:uppercase; font-size:22px; letter-spacing:.5px; line-height:1;}
+.veredicto .sub{font-size:12.5px; color:var(--text-dim); margin-top:3px;}
+.veredicto.antes{background:linear-gradient(135deg, rgba(70,110,160,.22), rgba(70,110,160,.06)); border-color:rgba(110,150,200,.45);}
+.veredicto.antes .marca{color:#8fb6e0;}
+.veredicto.despues{background:linear-gradient(135deg, rgba(255,122,26,.24), rgba(255,122,26,.06)); border-color:rgba(255,122,26,.5);}
+.veredicto.despues .marca{color:var(--ember,#ff7a1a);}
+.veredicto .emo{font-size:30px; line-height:1;}
+.bloque-lo-que-sale{border-left:3px solid var(--ember,#ff7a1a); padding:10px 14px; margin:12px 0;
+  background:var(--bg-panel-2); border-radius:0 10px 10px 0; font-size:13.5px; line-height:1.55; text-align:left;}
+.lista-cambios{margin:10px 0 0; padding-left:20px; font-size:12.5px; color:var(--text-dim); line-height:1.7; text-align:left;}
+.capa-carga .tarjeta .es-explain,
+.capa-carga .tarjeta > b{text-align:left;}
 .capa-carga .tarjeta{
   background:var(--bg-panel); border:1px solid var(--border); border-radius:14px;
   padding:26px 32px; text-align:center; max-width:min(90vw,440px);
@@ -7462,6 +7483,98 @@ function imagenDeEscena(numero){
   return inicial ? state.animado.imagenes[inicial.id] : null;
 }
 
+/* ------------------------------------------------------------------
+   ARREGLAR EL PROMPT DE UNA TOMA — idea del usuario, y es la buena.
+   En vez de confiar en que mis reglas automáticas acierten, aquí la IA MIRA:
+   lee la escena, mira las imágenes de referencia marcadas, ve la ficha del
+   producto, y decide si esta toma es un ANTES o un DESPUÉS. Reescribe el prompt
+   como debe ser y explica en pantalla, antes de gastar un peso, qué va a salir
+   en el video. Así se sabe con qué se está pagando.
+------------------------------------------------------------------ */
+async function arreglarPromptToma(n, escena){
+  if(!requireApiKey()) return;
+  const btn = document.querySelector(`[data-arreglar="${n}"]`);
+  const pre = document.getElementById('vidtxt-'+n);
+  if(!pre) return;
+  const original = pre.textContent;
+  const refs = refsMarcadasToma(n);
+  const f = productoActivo() || {};
+  const e = escena || {};
+
+  if(btn){ btn.disabled = true; btn.textContent = '🔧 analizando...'; }
+  mostrarCarga('Revisando esta toma', 'La IA está leyendo la escena y mirando tus imágenes de referencia para decidir si es un antes o un después.');
+  try{
+    const sistema =
+      'Eres el director de fotografía de un estudio de anuncios de transformación física. Te doy una toma de video: ' +
+      'la escena escrita, el prompt actual, y las imágenes de referencia que se van a usar (míralas). ' +
+      'TU TRABAJO: decidir si esta toma es del ANTES (el problema, el cuerpo sin resolver, el sufrimiento) o del ' +
+      'DESPUÉS (el resultado, el cuerpo transformado), y reescribir el prompt para que salga EXACTAMENTE eso.\n' +
+      'REGLAS DE LA CASA, innegociables:\n' +
+      '- Si es ANTES: el cuerpo va plano, caído, sin forma, tal como diga la escena, y se PROHÍBE cualquier curva, ' +
+      'levantar glúteos, llenar senos, marcar cintura o mejorar nada. El antes tiene que dar lástima.\n' +
+      '- Si es DESPUÉS: el cuerpo va sexy y exagerado pero SOLO en abdomen, mandíbula, piernas, glúteos y senos. ' +
+      'Brazos, hombros y espalda quedan femeninos, sin músculo, sin definición y sin venas. Nunca fisicoculturista.\n' +
+      '- Respeta las imágenes de referencia: es la MISMA persona/personaje, no lo reinventes.\n' +
+      '- El prompt final va EN INGLÉS (los modelos de video lo entienden mejor), en un solo bloque, describiendo ' +
+      'sujeto, escena, acción, cámara y luz. No incluyas etiquetas de estilo ni "single continuous take": eso se añade solo.\n' +
+      'Responde SOLO este JSON: {"tipo":"antes"|"despues"|"neutra","porque":"1 línea en español explicando cómo lo supiste",' +
+      '"que_se_vera":"2-3 líneas en español, en cristiano, describiendo lo que se va a ver en el video resultante",' +
+      '"cambios":["máx 4 líneas en español de lo que corregiste del prompt"],"prompt_corregido":"el prompt final en inglés"}';
+
+    const cuerpo =
+      'ESCENA (lo que debe pasar):\n' + (e.que_pasa || e.descripcion_es || '(sin descripción)') + '\n\n' +
+      'PROMPT ACTUAL:\n' + original + '\n\n' +
+      'PRODUCTO: ' + (f.nombre || '(sin ficha)') + (f.angulo ? (' — ángulo: ' + f.angulo) : '') + '\n' +
+      'BLOQUE DEL GUION: ' + (e.bloque_guion || '?') + '\n' +
+      (refs.length ? ('Se adjuntan ' + refs.length + ' imagen(es) de referencia que se usarán en esta toma: míralas y respétalas.')
+                   : 'Esta toma NO lleva imágenes de referencia.') +
+      comoEsElAntesYDespues() + comoLeGusta();
+
+    const v = parseJsonLoose(await callClaude(sistema, cuerpo, 2500, refs.slice(0,4))) || {};
+    if(!v.prompt_corregido) throw new Error('la IA no devolvió un prompt corregido');
+    ocultarCarga();
+
+    const esAntes = (v.tipo||'').toLowerCase().indexOf('antes') >= 0;
+    const esDespues = (v.tipo||'').toLowerCase().indexOf('despues') >= 0 || (v.tipo||'').toLowerCase().indexOf('después') >= 0;
+    const clase = esAntes ? 'antes' : esDespues ? 'despues' : '';
+    const emo = esAntes ? '😔' : esDespues ? '🔥' : '🎬';
+    const nombre = esAntes ? 'ES UN ANTES' : esDespues ? 'ES UN DESPUÉS' : 'TOMA NEUTRA';
+    const sub = esAntes ? 'Se le prohíben las curvas: sale plana, caída y sin forma.'
+              : esDespues ? 'Sale sexy y exagerada, pero con brazos, hombros y espalda femeninos.'
+              : 'No hay cuerpo que juzgar en esta toma.';
+
+    const html = '<div class="revision-toma">' +
+      '<div class="veredicto ' + clase + '"><span class="emo">' + emo + '</span>' +
+        '<div><div class="marca">' + nombre + '</div><div class="sub">' + escapeHtml(sub) + '</div></div></div>' +
+      (v.porque ? '<div class="es-explain" style="font-size:12.5px;">Cómo lo supo: ' + escapeHtml(v.porque) + '</div>' : '') +
+      '<div class="bloque-lo-que-sale"><b>Esto es lo que vas a ver en el video:</b><br>' + escapeHtml(v.que_se_vera||'') + '</div>' +
+      ((v.cambios||[]).length
+        ? '<b style="font-size:12.5px;">Lo que corrigió del prompt:</b><ul class="lista-cambios">' +
+          v.cambios.map(c=>'<li>' + escapeHtml(c) + '</li>').join('') + '</ul>'
+        : '') +
+      '<div class="toolkit-note" style="margin-top:12px;">' + refs.length + ' ' +
+        (refs.length===1?'imagen de referencia':'imágenes de referencia') + ' en esta toma. Nada se ha generado todavía: esto no te ha costado nada.</div>';
+    const htmlFinal = html + '</div>';
+
+    const eleccion = await mostrarAvisoModal('🔧 Revisión de la toma ' + n, htmlFinal, [
+      {id:'aplicar', texto:'Aplicar y quedarme con esto', principal:true},
+      {id:'dejar',   texto:'Dejarlo como estaba'}
+    ]);
+    if(eleccion === 'aplicar'){
+      pre.textContent = v.prompt_corregido;
+      if(!state.edicionesPrompt) state.edicionesPrompt = {};
+      state.edicionesPrompt['vidtxt-'+n] = v.prompt_corregido;   // sin disparar revisión del guion
+      saveSession();
+      toast('Prompt de la toma ' + n + ' corregido ✓ — ya puedes generar');
+    }
+  }catch(err){
+    ocultarCarga();
+    toast('⚠️ No se pudo revisar: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '🔧 Arreglar prompt'; }
+  }
+}
+
 /// EL BOTÓN "CREAR TODO DE UNA" — pedido del usuario.
 /// Genera en orden todo lo que falte: primero las imágenes del plan (con sus
 /// reglas de producto y cuerpo femenino), luego la voz de cada toma, luego el
@@ -7631,6 +7744,7 @@ function renderTomasFinales(escenas){
       </div>
       <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
         <button class="btn small" data-gen="vid-${n}">🎬 Generar video</button>
+        <button class="btn small primary" data-arreglar="${n}" title="La IA lee la escena y tus imágenes de referencia, decide si es un ANTES o un DESPUÉS, corrige el prompt y te enseña qué va a salir antes de gastar.">🔧 Arreglar prompt</button>
         <button class="btn small" data-ver-final="${n}" title="Enseña el texto EXACTO que se le manda al proveedor, con todas las reglas ya aplicadas. No cuesta nada.">👁️ Ver lo que se manda</button>
         <button class="btn small" data-copy-vid="${n}">📋 Copiar prompt</button>
         <button class="btn small" data-vid-archivo="${n}">📁 Poner uno del PC</button>
@@ -7744,6 +7858,8 @@ function renderTomasFinales(escenas){
         (setStatus)=>generarVideoEnCadena(texto, refs, '9:16', setStatus, segs),
         null, 'toma ' + n);
     };
+    const bArr = document.querySelector(`[data-arreglar="${n}"]`);
+    if(bArr) bArr.onclick = ()=>arreglarPromptToma(n, e);
     // Ver el texto EXACTO que se manda, con todas las reglas ya aplicadas.
     // Así nunca se paga a ciegas: se revisa antes de darle a generar.
     const bVer = document.querySelector(`[data-ver-final="${n}"]`);
