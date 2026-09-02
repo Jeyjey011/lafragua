@@ -5477,6 +5477,7 @@ function cardPlanImagen(im){
   const momento = im.momento && im.momento!=='unica' ? ` · frame ${escapeHtml(im.momento)}` : '';
   return `<div class="card" data-plan-card="${escapeHtml(im.id)}">
     <h4><span class="title-txt">${badge} ${im.orden}. ${escapeHtml(im.titulo||'')}${momento} <span class="mono" style="color:var(--text-dim); font-size:11px;">${escapeHtml(im.id)}</span></span>
+      <button class="btn small primary" data-arreglar-img="${escapeHtml(im.id)}" title="La IA mira las imágenes de referencia de esta toma, comprueba que la cara y el personaje coincidan, decide si es un ANTES o un DESPUÉS y corrige el prompt. Te enseña qué va a salir antes de gastar.">🔧 Arreglar prompt</button>
       <button class="btn small" data-copy-plan="${escapeHtml(im.id)}">📋 Copiar</button></h4>
     <div class="es-explain">${escapeHtml(im.para_que||'')}</div>
     ${dep}${prod}
@@ -5573,6 +5574,22 @@ function refDelPlan(id){
   return state.animado.imagenes[id] || null;
 }
 
+/// La HOJA DE PERSONAJE: la imagen maestra de la identidad. Se busca en este
+/// orden: la que el usuario haya fijado a mano, la primera imagen del grupo
+/// REFERENCIA del plan, o el avatar/modelo de la ficha. Es la que manda sobre
+/// la cara en todas las escenas.
+function hojaDePersonaje(){
+  const A = state.assets || {};
+  if(A.character_sheet) return A.character_sheet;
+  const plan = (state.animado.step9 && state.animado.step9.imagenes) ? state.animado.step9.imagenes : [];
+  const refPlan = plan.slice().sort((a,b)=>(a.orden||0)-(b.orden||0))
+                      .find(x => x && x.grupo === 'REFERENCIA' && state.animado.imagenes[x.id]);
+  if(refPlan) return state.animado.imagenes[refPlan.id];
+  if(A.modelo) return A.modelo;
+  const f = productoActivo() || {};
+  return f.foto_modelo || null;
+}
+
 /// Las fotos del producto que hay que adjuntar SIEMPRE que el producto sale en
 /// la imagen: el envase dibujado en el estilo (si existe) y la foto real de la
 /// ficha. Sin depender de que el usuario marque chips a mano.
@@ -5581,6 +5598,29 @@ function refsDeProducto(){
   const estilo = esDelModoAnimado() ? refDelPlan('PRODUCTO-ESTILO') : null;
   const real = f.foto_producto || state.assets.producto || null;
   return [estilo, real].filter(Boolean);
+}
+
+/// EL CANDADO DE IDENTIDAD — el mismo truco que arregló el envase, aplicado a la
+/// CARA. El plan escribe cosas como «Use image from ESC-06-INI», pero el modelo
+/// de imagen no sabe qué es «ESC-06-INI»: solo ve las imágenes adjuntas, sin
+/// nombre. Y «NO FACE MORPHING» en el EXCLUDE no sirve: los modelos ignoran las
+/// negaciones. Aquí se le dice, por POSICIÓN, cuál imagen manda para la cara.
+function forzarIdentidad(prompt, cuantasDeIdentidad){
+  if(!cuantasDeIdentidad) return prompt;
+  let p = String(prompt == null ? '' : prompt);
+  if(p.indexOf('IDENTITY LOCK') >= 0) return p;
+  // Las menciones por nombre confunden más que ayudan: se neutralizan.
+  p = p.replace(/\b(use|from)\s+image\s+from\s+[A-Z]{2,}-[0-9A-Z-]+/gi, 'use the first reference image')
+       .replace(/\b(REF|ESC|PRD)-[0-9A-Z-]+\b/g, 'the first reference image');
+  p += '\n\nIDENTITY LOCK: the FIRST ' + (cuantasDeIdentidad === 1 ? 'reference image is' : cuantasDeIdentidad + ' reference images are') +
+       ' the ONLY source of this character\'s identity. Reproduce that exact same character: same face shape, same facial features, ' +
+       'same eyes, nose and mouth, same skin/fruit tone and texture, same hair (color, length and style), same body proportions. ' +
+       'This is the SAME character in a different pose — copy the face from the reference, do not redesign, restyle, beautify or ' +
+       'age it, and do not blend it with anyone else. If the pose or clothing changes, the face must still be recognizably identical.\n' +
+       'THE REFERENCE IMAGE OVERRIDES THE TEXT: wherever this written prompt and the reference image disagree about how ' +
+       'the character looks, the REFERENCE IMAGE WINS. Treat the text as directions for the pose, the action and the scene ' +
+       'only — never as a new description of who this character is.';
+  return p;
 }
 
 /// Etiqueta en el prompt cuáles referencias son el producto — determinista, en
@@ -5670,7 +5710,14 @@ async function generarImagenPlan(im){
     if(statusEl) statusEl.textContent = ' ⚠️ genera primero: '+faltan.join(', ');
     return false;
   }
+  // LA HOJA DE PERSONAJE MANDA Y VA DE PRIMERA. Si cada escena solo se apoya en
+  // la anterior, la cara se va deformando un poco en cada salto y a las cinco
+  // escenas ya es otra persona. Poniendo la identidad maestra siempre delante,
+  // todas las escenas se comparan contra la MISMA cara, no contra la deriva.
   const refsPlan = (im.ref_de||[]).map(refDelPlan).filter(Boolean);
+  const hoja = hojaDePersonaje();
+  if(hoja && !im.necesita_foto_producto && refsPlan.indexOf(hoja) < 0) refsPlan.unshift(hoja);
+  else if(hoja && refsPlan.indexOf(hoja) < 0 && refsPlan.length) refsPlan.unshift(hoja);
   const refsChips = leerRefsSeleccionadas(genId, 'imagen');
   // Las del producto van SIEMPRE que el producto aparece, sin esperar a que nadie
   // marque una chip — y van al final, que es la posición que anuncia PRODUCT LOCK.
@@ -5679,6 +5726,10 @@ async function generarImagenPlan(im){
   const refs = base.slice(0, Math.max(1, maxRefsFor('imagen') - deProducto.length)).concat(deProducto);
   const preEl = document.getElementById('planpre-'+im.id);
   let text = preEl ? preEl.textContent : (im.code_block||'');
+  // La cara: las referencias del plan van PRIMERO en la lista, así que se le
+  // dice al modelo por posición cuáles mandan para la identidad del personaje.
+  const cuantasIdentidad = Math.min(refsPlan.length, refs.length - deProducto.length);
+  if(cuantasIdentidad > 0) text = forzarIdentidad(text, cuantasIdentidad);
   if(im.necesita_foto_producto) text = forzarProducto(text, deProducto.length);
   // El cuerpo femenino se fuerza en toda imagen que NO sea solo el producto: el
   // después sexy sin músculos en brazos/hombros/espalda, salga bien siempre.
@@ -7481,6 +7532,104 @@ function imagenDeEscena(numero){
   const dela = plan.filter(im => Number(im.escena) === Number(numero));
   const inicial = dela.find(im => im.momento !== 'final') || dela[0];
   return inicial ? state.animado.imagenes[inicial.id] : null;
+}
+
+/// ARREGLAR EL PROMPT DE UNA IMAGEN DEL PLAN — lo mismo que en las tomas, pero
+/// para el paso 9. Aquí lo crítico es la CARA: la IA mira las referencias que se
+/// van a usar y comprueba que el personaje sea el mismo, además de decidir si es
+/// un antes o un después.
+async function arreglarPromptImagen(im){
+  if(!requireApiKey()) return;
+  const btn = document.querySelector(`[data-arreglar-img="${im.id}"]`);
+  const pre = document.getElementById('planpre-'+im.id);
+  if(!pre) return;
+  const original = pre.textContent;
+  // Las MISMAS referencias que se usarán al generar, hoja de personaje incluida
+  // y de primera: si el revisor mirara otras, su veredicto no valdría de nada.
+  const refsPlan = (im.ref_de||[]).map(refDelPlan).filter(Boolean);
+  const hoja = hojaDePersonaje();
+  if(hoja && refsPlan.indexOf(hoja) < 0) refsPlan.unshift(hoja);
+  const refsChips = leerRefsSeleccionadas('plan-'+im.id, 'imagen');
+  const refs = Array.from(new Set(refsPlan.concat(refsChips))).slice(0,4);
+  const f = productoActivo() || {};
+
+  if(btn){ btn.disabled = true; btn.textContent = '🔧 mirando...'; }
+  mostrarCarga('Revisando esta imagen', 'La IA está mirando las referencias para comprobar la cara y decidir si es un antes o un después.');
+  try{
+    const sistema =
+      'Eres el director de arte de un estudio de anuncios de transformación física. Te doy el prompt de UNA imagen ' +
+      'y las imágenes de referencia que se van a adjuntar al generarla (míralas bien).\n' +
+      'TU TRABAJO: (1) decidir si esta imagen es del ANTES (el problema) o del DESPUÉS (el resultado); ' +
+      '(2) asegurar que el PERSONAJE sea EXACTAMENTE el de las referencias — misma cara, mismo pelo, mismo tono; ' +
+      '(3) reescribir el prompt para que salga eso.\n' +
+      'REGLAS DE LA CASA, innegociables:\n' +
+      '- ANTES: cuerpo plano, caído, sin forma tal como diga la escena. PROHIBIDO curvas, levantar glúteos, ' +
+      'llenar senos, marcar cintura o mejorar nada.\n' +
+      '- DESPUÉS: sexy y exagerado SOLO en abdomen, mandíbula, piernas, glúteos y senos. Brazos, hombros y ' +
+      'espalda femeninos, sin músculo ni venas. Nunca fisicoculturista.\n' +
+      '- LA CARA MANDA: nunca escribas nombres de otras imágenes (tipo "ESC-06-INI") porque el modelo de imagen ' +
+      'no los entiende; refiérete siempre a "the first reference image". Describe la cara del personaje de la ' +
+      'referencia con palabras concretas (forma de cara, ojos, pelo, tono) para que no se pierda.\n' +
+      '- No metas etiquetas de estilo ni de producto: se añaden solas después.\n' +
+      'Responde SOLO este JSON: {"tipo":"antes"|"despues"|"neutra","porque":"1 línea en español",' +
+      '"cara_coincide":true|false,"aviso_cara":"vacío si todo bien; si las referencias no bastan para fijar la cara, dilo en 1 línea",' +
+      '"que_se_vera":"2-3 líneas en español describiendo la imagen que va a salir",' +
+      '"cambios":["máx 4 líneas en español de lo que corregiste"],"prompt_corregido":"el prompt final en inglés"}';
+
+    const cuerpo =
+      'PROMPT ACTUAL DE LA IMAGEN "' + (im.titulo||im.id) + '":\n' + original + '\n\n' +
+      'PRODUCTO: ' + (f.nombre || '(sin ficha)') + (f.angulo ? (' — ángulo: ' + f.angulo) : '') + '\n' +
+      'GRUPO: ' + (im.grupo||'?') + (im.necesita_foto_producto ? ' · aquí sale el producto' : '') + '\n' +
+      (refs.length ? ('Se adjuntan ' + refs.length + ' referencia(s): la PRIMERA define la identidad del personaje. Míralas.')
+                   : 'ATENCIÓN: esta imagen NO lleva ninguna referencia adjunta, así que la cara saldrá inventada.') +
+      comoEsElAntesYDespues() + comoLeGusta();
+
+    const v = parseJsonLoose(await callClaude(sistema, cuerpo, 2500, refs)) || {};
+    if(!v.prompt_corregido) throw new Error('la IA no devolvió un prompt corregido');
+    ocultarCarga();
+
+    const esAntes = (v.tipo||'').toLowerCase().indexOf('antes') >= 0;
+    const esDespues = /despu/.test((v.tipo||'').toLowerCase());
+    const clase = esAntes ? 'antes' : esDespues ? 'despues' : '';
+    const emo = esAntes ? '😔' : esDespues ? '🔥' : '🖼️';
+    const nombre = esAntes ? 'ES UN ANTES' : esDespues ? 'ES UN DESPUÉS' : 'IMAGEN NEUTRA';
+    const sub = esAntes ? 'Se le prohíben las curvas: sale plana, caída y sin forma.'
+              : esDespues ? 'Sale sexy y exagerada, con brazos, hombros y espalda femeninos.'
+              : 'No hay cuerpo que juzgar en esta imagen.';
+    const avisoCara = (v.cara_coincide === false || (v.aviso_cara||'').trim())
+      ? '<div class="warn-row" style="text-align:left;">⚠️ <b>Ojo con la cara:</b> ' + escapeHtml(v.aviso_cara || 'las referencias no bastan para fijar la cara — marca la hoja de personaje o la imagen buena antes de generar.') + '</div>'
+      : '<div class="es-explain" style="font-size:12.5px;">✅ La cara queda amarrada a la primera imagen de referencia.</div>';
+
+    const html = '<div class="revision-toma">' +
+      '<div class="veredicto ' + clase + '"><span class="emo">' + emo + '</span>' +
+        '<div><div class="marca">' + nombre + '</div><div class="sub">' + escapeHtml(sub) + '</div></div></div>' +
+      (v.porque ? '<div class="es-explain" style="font-size:12.5px;">Cómo lo supo: ' + escapeHtml(v.porque) + '</div>' : '') +
+      avisoCara +
+      '<div class="bloque-lo-que-sale"><b>Esto es lo que vas a ver en la imagen:</b><br>' + escapeHtml(v.que_se_vera||'') + '</div>' +
+      ((v.cambios||[]).length
+        ? '<b style="font-size:12.5px;">Lo que corrigió del prompt:</b><ul class="lista-cambios">' +
+          v.cambios.map(c=>'<li>' + escapeHtml(c) + '</li>').join('') + '</ul>' : '') +
+      '<div class="toolkit-note" style="margin-top:12px;">' + refs.length + ' ' +
+        (refs.length===1?'imagen de referencia':'imágenes de referencia') + '. Nada se ha generado todavía: esto no te ha costado nada.</div></div>';
+
+    const eleccion = await mostrarAvisoModal('🔧 Revisión de "' + (im.titulo||im.id) + '"', html, [
+      {id:'aplicar', texto:'Aplicar y quedarme con esto', principal:true},
+      {id:'dejar',   texto:'Dejarlo como estaba'}
+    ]);
+    if(eleccion === 'aplicar'){
+      pre.textContent = v.prompt_corregido;
+      im.code_block = v.prompt_corregido;
+      if(!state.edicionesPrompt) state.edicionesPrompt = {};
+      state.edicionesPrompt['planpre-'+im.id] = v.prompt_corregido;
+      saveSession();
+      toast('Prompt de "' + (im.titulo||im.id) + '" corregido ✓');
+    }
+  }catch(err){
+    ocultarCarga();
+    toast('⚠️ No se pudo revisar: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '🔧 Arreglar prompt'; }
+  }
 }
 
 /* ------------------------------------------------------------------
