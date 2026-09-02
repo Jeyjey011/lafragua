@@ -1478,6 +1478,7 @@ footer.app-footer{text-align:center; padding:30px 0 50px; color:var(--steel); fo
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn calm" id="btnIdeas">💡 Dame 6 ideas de historia</button>
         <button class="btn small hidden" id="btnMasIdeas">🎲 Otras seis</button>
+        <button class="btn small" id="btnRecetas" title="Clona la fórmula (estilo, emociones, formato) de un anuncio que ya te funcionó">🏆 Clonar receta ganadora</button>
       </div>
       <div id="ideasResult" style="margin-top:14px;"></div>
     </div>
@@ -7924,9 +7925,81 @@ async function marcarResultado(){
   });
   guardarHistorial(h);
   pintarHistorial();
-  toast(cual === 'ganador' ? 'Guardado como ganador — las próximas ideas lo tendrán en cuenta'
+  // PUNTO 5 — RECETAS GANADORAS: si funcionó, se guarda su fórmula completa
+  // (estilo + emociones + formato + duración + arquetipo) para clonarla luego.
+  if(cual === 'ganador'){
+    try{ guardarReceta(angulo || proy, idea, nota); }catch(e){}
+  }
+  toast(cual === 'ganador' ? 'Guardado como GANADOR — y su receta quedó lista para clonar en otro producto'
       : cual === 'quemado' ? 'Guardado como quemado — no te lo volverá a proponer igual'
       : 'Guardado');
+}
+
+/* ============================================================
+   RECETAS GANADORAS (punto 5) — la fórmula de un anuncio que vendió,
+   lista para clonar con otro producto: estilo, emociones, formato, duración.
+============================================================ */
+function recetas(){
+  try{ return JSON.parse(localStorage.getItem('fragua_recetas') || '[]'); }catch(e){ return []; }
+}
+function guardarReceta(nombre, idea, nota){
+  const tomas = (state.animado && state.animado.tomas) || [];
+  const durProm = tomas.length ? Math.round(tomas.reduce((s,e)=>s+(e.duracion_seg||5),0)/tomas.length) : 5;
+  const r = recetas();
+  r.push({
+    f: new Date().toISOString(),
+    nombre: nombre || 'receta',
+    producto: (productoActivo()||{}).nombre || '',
+    estilo: estiloActual(),
+    emociones: (state.animado && state.animado.emocionesArco) || [],
+    formato: (document.getElementById('ideasFormato')||{}).value || 'personas',
+    arquetipo: idea ? (idea.arquetipo||'') : '',
+    angulo: (state.animado.elegido||{}).nombre || '',
+    escenas: tomas.length,
+    duracion_prom: durProm,
+    nota: nota || ''
+  });
+  localStorage.setItem('fragua_recetas', JSON.stringify(r.slice(-30)));
+}
+/// Aplica una receta a un proyecto nuevo: pone estilo, emociones y formato.
+/// No toca el producto — solo la fórmula de cómo se cuenta.
+function aplicarReceta(rec){
+  if(!rec) return;
+  if(!state.animado) state.animado = {};
+  state.animado.estilo = rec.estilo;
+  const sel = document.getElementById('aEstilo'); if(sel) sel.value = rec.estilo;
+  state.animado.emocionesArco = (rec.emociones||[]).slice();
+  try{ pintarArcoEmocional(); }catch(e){}
+  const fmt = document.getElementById('ideasFormato'); if(fmt && rec.formato) fmt.value = rec.formato;
+  saveSession();
+  toast('Receta aplicada: estilo ' + rec.estilo + (rec.emociones&&rec.emociones.length?(' + '+rec.emociones.length+' emociones'):'') + '. Ahora escribe el producto y dale a las ideas.');
+}
+/// Los botones "Clonar esta receta" viven dentro del modal, así que se escuchan
+/// delegados: al pulsar uno, se cierra el modal y se aplica la receta.
+document.addEventListener('click', (e)=>{
+  const b = e.target.closest && e.target.closest('[data-usar-receta]');
+  if(!b) return;
+  const rec = recetas()[parseInt(b.dataset.usarReceta,10)];
+  const capa = document.getElementById('capaAviso');
+  if(capa) capa.classList.remove('activa');
+  aplicarReceta(rec);
+});
+
+/// Panel para elegir una receta ganadora y clonarla.
+async function elegirReceta(){
+  const r = recetas();
+  if(!r.length){ toast('Aún no hay recetas. Marca un anuncio como 🏆 Funcionó y su receta se guarda sola.'); return; }
+  const items = r.slice().reverse().slice(0,12).map((x,i)=>
+    '<div class="card" style="margin:6px 0;"><b>'+escapeHtml(x.nombre)+'</b>' +
+    '<div class="es-explain" style="margin:2px 0;">Estilo <b>'+escapeHtml(x.estilo)+'</b> · '+
+    (x.emociones&&x.emociones.length?x.emociones.length+' emociones · ':'')+
+    (x.formato||'')+' · '+(x.escenas||'?')+' escenas de ~'+(x.duracion_prom||5)+'s'+
+    (x.producto?(' · fue para '+escapeHtml(x.producto)):'')+'</div>'+
+    (x.nota?'<div class="es-explain" style="margin:0; color:var(--text-dim);">"'+escapeHtml(x.nota)+'"</div>':'')+
+    '<button class="btn small" data-usar-receta="'+ (r.length-1-i) +'" style="margin-top:6px;">🧬 Clonar esta receta</button></div>').join('');
+  await mostrarAvisoModal('🏆 Tus recetas ganadoras',
+    '<div style="text-align:left; max-height:50vh; overflow:auto;">'+items+'</div>',
+    [{id:'ok', texto:'Cerrar', principal:true}]);
 }
 
 /// Lo que se le cuenta a la IA antes de que proponga nada nuevo.
@@ -11309,6 +11382,50 @@ async function animadoPaso4(){
   }catch(err){ animadoError(err.message); }
   finally{ setLoadingAnimado(false); }
 }
+/// TEST A/B DE HOOKS — pedido del usuario (punto 3).
+/// Genera 3 ganchos distintos para los 2 primeros segundos sobre el mismo guion.
+/// Aplicar uno solo cambia el arranque: se prueba cuál para el scroll sin rehacer
+/// el video. Al aplicar, se marca que el guion cambió (para rehacer solo la 1ª toma).
+async function generarHooksAB(){
+  if(!requireApiKey()) return;
+  const g = (state.animado.step4 && state.animado.step4.guion) || {};
+  const cont = document.getElementById('hooksABResult');
+  const btn = document.getElementById('btnHooksAB');
+  if(!g.hook){ if(cont) cont.innerHTML = '<div class="warn-row">Genera antes el guion.</div>'; return; }
+  if(btn) btn.disabled = true;
+  if(cont) cont.innerHTML = forjaHtml('buscando 3 hooks...');
+  try{
+    const sistema = 'Eres redactor de anuncios de TikTok. Te doy un guion y su hook actual. ' +
+      'Devuelve SOLO un JSON {"hooks":["h1","h2","h3"]} con 3 hooks NUEVOS y bien distintos entre sí ' +
+      'para los DOS PRIMEROS SEGUNDOS, en primera persona, máximo 13 palabras cada uno, humillación ' +
+      'concreta o intriga que pare el scroll — no beneficios. Mismo producto y mismo dolor del guion, ' +
+      'solo cambia la forma de arrancar. Nada de segunda persona ("tú", "te").';
+    const cuerpo = 'HOOK ACTUAL: ' + (g.hook.texto||'') + '\nGUION: ' + JSON.stringify(g) + comoLeGusta();
+    const v = parseJsonLoose(await callClaude(sistema, cuerpo, 1200)) || {};
+    const hooks = (v.hooks||[]).filter(Boolean).slice(0,3);
+    if(!hooks.length){ cont.innerHTML = '<div class="warn-row">No devolvió hooks — reintenta.</div>'; return; }
+    window._hooksAB = hooks;
+    cont.innerHTML = hooks.map((h,i)=>
+      '<div class="card" style="margin:6px 0;"><span class="es-explain" style="margin:0;"><b>Hook '+String.fromCharCode(65+i)+':</b> '+escapeHtml(h)+'</span>'+
+      '<button class="btn small" data-usar-hook="'+i+'" style="margin-top:6px;">✅ Usar este</button></div>').join('');
+    cont.querySelectorAll('[data-usar-hook]').forEach(b=>{
+      b.onclick = ()=>{
+        const h = (window._hooksAB||[])[parseInt(b.dataset.usarHook,10)];
+        if(!h) return;
+        state.animado.step4.guion.hook = {texto:h, intencion:(g.hook.intencion||'')};
+        renderPaso4(state.animado.step4);
+        // el guion cambió: la 1ª toma y su voz hay que rehacerlas
+        try{ if(state.edicionesPrompt){ delete state.edicionesPrompt['voztxt-1']; delete state.edicionesPrompt['vidtxt-1']; } }catch(e){}
+        state.hayEdicionesSinSincronizar = true;
+        try{ pintarAvisoSincronizar(); }catch(e){}
+        saveSession();
+        toast('Hook aplicado — sincroniza el guion y rehaz solo la toma 1');
+      };
+    });
+  }catch(err){ cont.innerHTML = '<div class="warn-row">⚠️ '+escapeHtml(err.message)+'</div>'; }
+  finally{ if(btn) btn.disabled = false; }
+}
+
 function renderPaso4(data){
   const g = data.guion||{};
   const blocks = [
@@ -11327,7 +11444,15 @@ function renderPaso4(data){
   html += `<div class="section-title" style="margin-top:14px;"><h2 style="font-size:14px;">Hooks alternativos</h2><div class="line"></div></div>`;
   html += (data.hooks_alternativos||[]).map((h,i)=>`<div class="card"><span class="es-explain" style="margin:0;">${escapeHtml(h)}</span> <button class="btn small" data-copy-hookalt="${i}" style="margin-top:8px;">📋 Copiar</button></div>`).join('');
   html += `<button class="btn small primary" id="btnCopyGuionCompleto" style="margin-top:10px;">📋 Copiar guion completo</button>`;
+  html += `<div class="card" style="border-color:var(--brand); margin-top:12px;">
+      <h4><span class="title-txt">🎣 Test A/B de hooks</span>
+        <button class="btn small" id="btnHooksAB">Dame 3 hooks para probar</button></h4>
+      <div class="es-explain">Tres ganchos distintos para los 2 primeros segundos, sobre el MISMO guion. Aplicas uno con un clic y solo cambia el arranque — pruebas cuál para el scroll sin rehacer el video entero.</div>
+      <div id="hooksABResult" style="margin-top:8px;"></div>
+    </div>`;
   document.getElementById('guionResult').innerHTML = html;
+  const bAB = document.getElementById('btnHooksAB');
+  if(bAB) bAB.onclick = generarHooksAB;
   (data.hooks_alternativos||[]).forEach((h,i)=>{
     const el = document.querySelector(`[data-copy-hookalt="${i}"]`);
     if(el) el.onclick = ()=>copyText(h, 'Hook alternativo');
@@ -11591,6 +11716,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
   if(bpf) bpf.onclick = traerFotoDeLaFicha;
   document.getElementById('btnIdeas').onclick = generarIdeas;
   document.getElementById('btnMasIdeas').onclick = generarIdeas;
+  { const br = document.getElementById('btnRecetas'); if(br) br.onclick = elegirReceta; }
   document.getElementById('btnAnguloPropio').onclick = usarAnguloPropio;
   document.getElementById('btnAnguloFicha').onclick  = traerAnguloDeLaFicha;
   document.getElementById('btnA4').onclick = animadoPaso4;
