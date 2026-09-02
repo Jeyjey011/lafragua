@@ -1841,6 +1841,28 @@ footer.app-footer{text-align:center; padding:30px 0 50px; color:var(--steel); fo
         <div class="field"><label>Otra foto de apoyo</label><input type="text" id="vFotoExtra" placeholder="https://... (otra vista, el kit, el resultado)"></div>
       </div>
       <div class="field"><label>Notas</label><input type="text" id="vNotas" placeholder="Lo que no quieras olvidar de este producto"></div>
+
+      <div class="section-title" style="margin-top:18px;"><h2 style="font-size:14px;">📸 Banco de fotos antes / después de este producto</h2><div class="line"></div></div>
+      <p class="hint">Guarda aquí las fotos reales de <b>antes</b> y de <b>después</b> de tus clientes o modelos. Quedan pegadas al producto y se usan como referencia para los creativos de antes/después — no hay que volver a buscarlas. Puedes pegar una URL o elegir el archivo de tu PC.</p>
+      <div class="grid2">
+        <div class="field">
+          <label>🔻 Fotos del ANTES</label>
+          <div class="tira-refs" id="galeriaAntes"></div>
+          <div style="display:flex; gap:6px; margin-top:6px;">
+            <input type="text" id="urlAntes" placeholder="https://... y Enter" style="flex:1;">
+            <button class="btn small" id="btnAntesPC">📁 del PC</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>🔺 Fotos del DESPUÉS</label>
+          <div class="tira-refs" id="galeriaDespues"></div>
+          <div style="display:flex; gap:6px; margin-top:6px;">
+            <input type="text" id="urlDespues" placeholder="https://... y Enter" style="flex:1;">
+            <button class="btn small" id="btnDespuesPC">📁 del PC</button>
+          </div>
+        </div>
+      </div>
+
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn primary" id="btnVarGuardar">💾 Guardar producto</button>
         <button class="btn" id="btnVarNuevo">➕ Nuevo</button>
@@ -4634,12 +4656,14 @@ function renderGenResult(containerEl, url, kind, assetKey){
         : `<button class="btn small" data-fotos="${url}">📷 Guardar en Fotos</button>
            <button class="btn small" data-compartir="${url}">📤 Compartir</button>`)
     : `<a class="btn small" href="${url}" target="_blank" rel="noopener">⬇️ Abrir / descargar</a>`;
+  const btnGanadora = (kind === 'imagen')
+    ? `<button class="btn small" data-ganadora="${escapeHtml(url)}" title="Guarda esta imagen dentro del producto como referencia ganadora para nuevos creativos">🏆 Guardar como ganadora</button>` : '';
   const setBtns = (assetKey && kind !== 'audio') ? `
     <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
       <button class="btn small" data-set-asset="modelo">📌 Usar como avatar de referencia</button>
       <button class="btn small" data-set-asset="producto_en_mano">📌 Usar como producto de referencia</button>
-      ${guardar}
-    </div>` : `<div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">${guardar}</div>`;
+      ${btnGanadora}${guardar}
+    </div>` : `<div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">${btnGanadora}${guardar}</div>`;
   const corregible = (kind !== 'video' && kind !== 'audio' && containerEl.id)
     ? cajaCorreccionHtml(containerEl.id.replace('genresult-','')) : '';
   containerEl.innerHTML = tag + setBtns + corregible;
@@ -4653,6 +4677,8 @@ function renderGenResult(containerEl, url, kind, assetKey){
   containerEl.querySelectorAll('[data-set-asset]').forEach(b=>{
     b.onclick = ()=>{ state.assets[b.dataset.setAsset] = url; toast('Guardado como referencia: '+b.dataset.setAsset); };
   });
+  const btnGan = containerEl.querySelector('[data-ganadora]');
+  if(btnGan) btnGan.onclick = ()=>guardarImagenGanadora(btnGan.dataset.ganadora);
   containerEl.querySelectorAll('[data-fotos]').forEach(b=>{ b.onclick = ()=>guardarEnFotos(b.dataset.fotos); });
   containerEl.querySelectorAll('[data-compartir]').forEach(b=>{ b.onclick = ()=>compartirNativo(b.dataset.compartir); });
 }
@@ -6225,8 +6251,53 @@ function leerFichaProducto(){
     foto_contenido: document.getElementById('vFotoContenido').value.trim(),
     foto_modelo: document.getElementById('vFotoModelo').value.trim(),
     foto_extra: document.getElementById('vFotoExtra').value.trim(),
-    notas: document.getElementById('vNotas').value.trim()
+    notas: document.getElementById('vNotas').value.trim(),
+    // El banco de fotos antes/después vive en memoria mientras se edita la ficha.
+    fotos_antes: (_bancoFotos.antes || []).slice(),
+    fotos_despues: (_bancoFotos.despues || []).slice(),
+    // Ganadoras: imágenes de creativos que funcionaron para este producto.
+    ganadoras: (_bancoFotos.ganadoras || []).slice()
   };
+}
+
+/* ============================================================
+   BANCO DE FOTOS DEL PRODUCTO — antes, después y ganadoras.
+   Vive pegado al producto: no hay que volver a buscar las fotos para cada
+   creativo de antes/después. Se puede añadir por URL o desde el PC.
+============================================================ */
+let _bancoFotos = { antes: [], despues: [], ganadoras: [] };
+function pintarBancoFotos(){
+  ['antes','despues'].forEach(cual=>{
+    const cont = document.getElementById('galeria' + (cual==='antes'?'Antes':'Despues'));
+    if(!cont) return;
+    const lista = _bancoFotos[cual] || [];
+    cont.innerHTML = lista.length
+      ? lista.map((u,i)=>`<span class="ref-chip" style="position:relative;"><img src="${escapeHtml(u)}" data-zoom="${escapeHtml(u)}" loading="lazy"><button class="btn small" data-quita-foto="${cual}|${i}" title="Quitar" style="position:absolute; top:-6px; right:-6px; padding:0 5px;">✕</button></span>`).join('')
+      : '<span class="toolkit-note">Ninguna todavía.</span>';
+  });
+}
+function anadirFotoBanco(cual, url){
+  const u = String(url||'').trim();
+  if(!u) return;
+  if(!_bancoFotos[cual]) _bancoFotos[cual] = [];
+  if(_bancoFotos[cual].indexOf(u) < 0) _bancoFotos[cual].push(u);
+  pintarBancoFotos();
+}
+async function anadirFotoDelPC(cual){
+  if(!window.fragua || !window.fragua.elegirArchivo){ toast('Elegir del PC solo en la app de escritorio — pega la URL'); return; }
+  try{
+    const r = await window.fragua.elegirArchivo('imagen');
+    if(!r || r.cancelado) return;
+    anadirFotoBanco(cual, r.url);
+    toast('Foto de ' + cual + ' añadida');
+  }catch(e){ toast('No se pudo: ' + e.message); }
+}
+/// Registra las fotos del banco como assets, para que salgan como chips de
+/// referencia en TODOS los botones de generar (creativos de antes/después).
+function registrarBancoFotos(){
+  (_bancoFotos.antes||[]).forEach((u,i)=>{ state.assets['antes_'+(i+1)] = u; });
+  (_bancoFotos.despues||[]).forEach((u,i)=>{ state.assets['despues_'+(i+1)] = u; });
+  try{ refreshAllRefChips(); }catch(e){}
 }
 function pintarFichaProducto(p){
   p = p || {};
@@ -6243,6 +6314,13 @@ function pintarFichaProducto(p){
   document.getElementById('vFotoModelo').value = p.foto_modelo||'';
   document.getElementById('vFotoExtra').value = p.foto_extra||'';
   document.getElementById('vNotas').value = p.notas||'';
+  _bancoFotos = {
+    antes: (p.fotos_antes||[]).slice(),
+    despues: (p.fotos_despues||[]).slice(),
+    ganadoras: (p.ganadoras||[]).slice()
+  };
+  pintarBancoFotos();
+  registrarBancoFotos();
 }
 function guardarFichaProducto(){
   const ficha = leerFichaProducto();
@@ -6259,6 +6337,24 @@ function guardarFichaProducto(){
     guardarProductos(); renderListaProductos(); registrarFotosDelProducto(ficha);
     toast('Producto actualizado ✓');
   }
+  try{ registrarBancoFotos(); }catch(e){}
+}
+
+/// Guarda una imagen que FUNCIONÓ dentro del producto activo — pedido del
+/// usuario: aprender de las imágenes que venden. Queda como referencia
+/// "ganadora" para los próximos creativos de ese producto.
+function guardarImagenGanadora(url){
+  const i = state.productoActivo;
+  if(i == null || !state.productos[i]){ toast('Selecciona un producto para guardarle la imagen ganadora'); return; }
+  const p = state.productos[i];
+  p.ganadoras = p.ganadoras || [];
+  if(p.ganadoras.indexOf(url) < 0) p.ganadoras.push(url);
+  p.ganadoras = p.ganadoras.slice(-20);
+  guardarProductos();
+  if(state.productoActivo === i){ _bancoFotos.ganadoras = p.ganadoras.slice(); }
+  state.assets['ganadora_'+p.ganadoras.length] = url;
+  try{ refreshAllRefChips(); }catch(e){}
+  toast('Guardada como ganadora en "' + (p.nombre||'el producto') + '" — la usará de referencia en nuevos creativos');
 }
 function borrarFichaProducto(){
   const sel = document.getElementById('vProductoSel');
@@ -11860,6 +11956,18 @@ window.addEventListener('DOMContentLoaded', ()=>{
     toast('Cadenas restauradas');
   };
   document.getElementById('btnVarGuardar').onclick = guardarFichaProducto;
+  // Banco de fotos antes/después: añadir por URL (Enter), del PC, y quitar.
+  { const ua = document.getElementById('urlAntes'); if(ua) ua.addEventListener('keydown', e=>{ if(e.key==='Enter'){ anadirFotoBanco('antes', ua.value); ua.value=''; } }); }
+  { const ud = document.getElementById('urlDespues'); if(ud) ud.addEventListener('keydown', e=>{ if(e.key==='Enter'){ anadirFotoBanco('despues', ud.value); ud.value=''; } }); }
+  { const ba = document.getElementById('btnAntesPC'); if(ba) ba.onclick = ()=>anadirFotoDelPC('antes'); }
+  { const bd = document.getElementById('btnDespuesPC'); if(bd) bd.onclick = ()=>anadirFotoDelPC('despues'); }
+  document.addEventListener('click', e=>{
+    const b = e.target.closest && e.target.closest('[data-quita-foto]');
+    if(!b) return;
+    const [cual, i] = b.dataset.quitaFoto.split('|');
+    if(_bancoFotos[cual]){ _bancoFotos[cual].splice(parseInt(i,10),1); pintarBancoFotos(); }
+  });
+  try{ pintarBancoFotos(); }catch(e){}
   document.getElementById('btnVarBorrar').onclick = borrarFichaProducto;
   document.getElementById('btnVarNuevo').onclick = ()=>{
     document.getElementById('vProductoSel').value = '';
