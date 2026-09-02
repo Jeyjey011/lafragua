@@ -4027,6 +4027,31 @@ function tamanoOA(aspecto){
   if(aspecto === '16:9') return '1536x1024';
   return '1024x1536';   // 9:16 y cualquier otro vertical
 }
+/* ------------------------------------------------------------------
+   LO QUE LLEGA EN BASE64 SE VA A DISCO
+   OpenAI devuelve la imagen como texto base64, no como enlace. Dejarla así
+   rompía DOS cosas: llenaba el cupo de almacenamiento del navegador (un par de
+   imágenes son megas dentro de la sesión), y no servía de referencia para el
+   video, porque los proveedores de video no leen base64 y la ignoraban en
+   silencio. Se guarda en la carpeta del proyecto y se usa su URL local.
+------------------------------------------------------------------ */
+async function aDiscoSiEsData(url, tipo, etiqueta){
+  const u = String(url||'');
+  if(u.indexOf('data:') !== 0) return u;
+  if(!(window.fragua && window.fragua.guardarBinario)) return u;   // en la web no hay disco: se deja igual
+  try{
+    const coma = u.indexOf(',');
+    const cabecera = u.slice(5, coma);                       // p.ej. image/png;base64
+    const base64 = u.slice(coma + 1);
+    const mime = cabecera.split(';')[0] || 'image/png';
+    const ext = mime.indexOf('jpeg')>=0 ? '.jpg' : mime.indexOf('webp')>=0 ? '.webp'
+              : mime.indexOf('mpeg')>=0 || mime.indexOf('mp3')>=0 ? '.mp3'
+              : mime.indexOf('mp4')>=0 ? '.mp4' : '.png';
+    const r = await window.fragua.guardarBinario(base64, tipo||'imagen', ext, etiqueta||'imagen');
+    return (r && r.url) ? r.url : u;
+  }catch(e){ return u; }
+}
+
 async function oaGenerateImage(prompt, refUrls, aspecto){
   if(!requireOaKey()) return null;
   const urls = (refUrls||[]).filter(Boolean).slice(0,16); // OpenAI acepta hasta 16 imágenes de referencia en /images/edits
@@ -4059,7 +4084,8 @@ async function oaGenerateImage(prompt, refUrls, aspecto){
   if(body.error) throw new Error('OpenAI: '+(body.error.message||'fallo al generar'));
   const item = body.data && body.data[0];
   if(!item) throw new Error('OpenAI no devolvió ninguna imagen.');
-  if(item.b64_json) return 'data:image/png;base64,'+item.b64_json;
+  // A disco: si se queda como base64 llena el almacenamiento y el video no la lee.
+  if(item.b64_json) return await aDiscoSiEsData('data:image/png;base64,'+item.b64_json, 'imagen', 'openai');
   if(item.url) return item.url;
   throw new Error('OpenAI no devolvió un formato reconocible.');
 }
@@ -4290,10 +4316,37 @@ function refreshAllRefChips(){
    assets ya generados, y cualquier tarea de WaveSpeed/APImart que quedó a medias se guardan en este navegador y
    se revisan solos al abrir la página — sin pegar ningún ID ni depender de tener acceso a la cuenta de WaveSpeed.
 ============================================================ */
+/// Red de seguridad del almacenamiento: una imagen en base64 son megas, y el
+/// navegador solo da unos pocos. Antes se guardaban enteras dentro de la sesión
+/// y saltaba «no hay cupo de almacenamiento». Nunca se persiste un data: —
+/// lo que está en disco se recupera solo, y lo que no, se vuelve a generar.
+function sinDataUrls(x){
+  if(typeof x === 'string') return x.indexOf('data:') === 0 ? '' : x;
+  if(Array.isArray(x)) return x.map(sinDataUrls);
+  if(x && typeof x === 'object'){
+    const o = {};
+    for(const k in x) if(Object.prototype.hasOwnProperty.call(x,k)) o[k] = sinDataUrls(x[k]);
+    return o;
+  }
+  return x;
+}
+let _avisoCupoDado = false;
 function saveSession(){
+  const paquete = sinDataUrls({result: state.result, assets: state.assets, pendingTasks: state.pendingTasks, animado: state.animado, ads: state.ads, c6: state.c6, generados: state.generados, edicionesPrompt: state.edicionesPrompt, proyectoAbierto: state.proyectoAbierto});
   try{
-    localStorage.setItem('fragua_session', JSON.stringify({result: state.result, assets: state.assets, pendingTasks: state.pendingTasks, animado: state.animado, ads: state.ads, c6: state.c6, generados: state.generados, edicionesPrompt: state.edicionesPrompt, proyectoAbierto: state.proyectoAbierto}));
-  }catch(e){ /* localStorage lleno o similar — no es crítico, se sigue sin persistir */ }
+    localStorage.setItem('fragua_session', JSON.stringify(paquete));
+  }catch(e){
+    // Sigue sin caber: se suelta lo más pesado y prescindible antes de rendirse.
+    try{
+      delete paquete.result; delete paquete.ads; delete paquete.c6;
+      localStorage.setItem('fragua_session', JSON.stringify(paquete));
+    }catch(e2){
+      if(!_avisoCupoDado){
+        _avisoCupoDado = true;
+        try{ toast('⚠️ El navegador se quedó sin espacio para la sesión. Tus archivos están a salvo en la carpeta del proyecto; guarda el proyecto en 📁 Proyecto para no perder el avance.'); }catch(x){}
+      }
+    }
+  }
 }
 function loadSession(){
   try{
@@ -7106,7 +7159,10 @@ async function generarVideoEnCadena(prompt, refUrls, aspecto, setStatus, duracio
   }
   const pasos = leerCadena('fragua_cadena_video', CADENA_VIDEO_DEFECTO).filter(p=>hayLlavePara(p.prov));
   if(!pasos.length) throw new Error('No hay llave de APImart ni de WaveSpeed. Ponla en ⚙️ Configuración.');
-  const refs = (refUrls||[]).filter(Boolean);
+  // Las referencias del VIDEO también hay que convertirlas: una imagen guardada
+  // en el proyecto (archivos.local) el proveedor no la puede descargar, y antes
+  // se la mandábamos igual — por eso el video ignoraba las fotos de referencia.
+  const refs = await refsUniversales(refUrls);
   let ultimo = null;
   for(let i=0;i<pasos.length;i++){
     const p = pasos[i];
@@ -7226,6 +7282,25 @@ const REGLA_CUERPO_FEMENINO =
   'glutes, and fuller firmer breasts. Curvy hourglass silhouette of a sexy fitness model / instagram ' +
   'baddie — NEVER a female bodybuilder, never broad shoulders, never a masculine frame.';
 
+/// EL CANDADO DEL *ANTES* — el error más caro que cometí: el candado del después
+/// («glúteos grandes y levantados, senos llenos, silueta de reloj de arena») se
+/// inyectaba en TODA toma femenina, también en las del ANTES. Resultado: la
+/// calabaza que debía salir plana y caída salía con curvas. En un ANTES manda
+/// justo lo contrario, y se prohíbe explícitamente mejorar el cuerpo.
+const REGLA_CUERPO_ANTES =
+  'BEFORE-STATE BODY LOCK: this is the BEFORE shot. Render the body EXACTLY as described in the ' +
+  'scene — flat, saggy, shapeless, undefined — and do NOT improve, lift, enlarge, tone or flatter ' +
+  'it in any way. ABSOLUTELY FORBIDDEN here: curves, hourglass silhouette, lifted or round glutes, ' +
+  'full or perky breasts, defined waist, toned abs, muscle. Keep it flat-chested, sagging and ' +
+  'shapeless as written. Arms, shoulders and back stay slim and feminine, never muscular. ' +
+  'The sadness of this body is the whole point of the shot: if it looks good, the ad fails.';
+
+/// ¿Esta toma es del ANTES? (para no aplicarle el candado del después).
+function esTomaAntes(txt){
+  const s = String(txt||'').toLowerCase();
+  return /\bantes\b|\bbefore\b|before-state|sin marca|sin busto|pecho plano|flat chest|flat-chested|caid|caído|caida|sagging|saggy|droop|flacid|flácid|flacc|raquitic|raquític|esqueletic|huesud|skinny|bony|shapeless|sin curvas|no curves|sin forma|deprimid|llora|crying|sufriendo|suffering|antes de (probar|usar|tomar)/.test(s);
+}
+
 /// La POSE — pedido del usuario: ella se sostiene cada zona con las manos y hace
 /// una risa picarona. Va en FOTO y en video: las manos enmarcando cada zona
 /// ayudan a que la anatomía no se deforme. (La pose es una imagen; sirve igual
@@ -7264,8 +7339,9 @@ function hayRecorridoCamara(txt){
 function forzarCuerpoFemenino(prompt){
   let p = String(prompt == null ? '' : prompt);
   if(!pareceFemenino(p)) return p;
-  if(p.indexOf('FEMALE BODY LOCK') >= 0) return p;
-  return p + '\n\n' + REGLA_CUERPO_FEMENINO;
+  if(p.indexOf('BODY LOCK') >= 0) return p;
+  // En el ANTES manda el candado contrario: nada de curvas ni de mejorar el cuerpo.
+  return p + '\n\n' + (esTomaAntes(p) ? REGLA_CUERPO_ANTES : REGLA_CUERPO_FEMENINO);
 }
 /// VIDEO: candado del cuerpo + la pose (manos sosteniendo cada zona, risa
 /// picarona) si muestra el cuerpo + el rebote si la cámara lo recorre.
@@ -7273,9 +7349,15 @@ function forzarCuerpoFemenino(prompt){
 function forzarVideoFemenino(texto){
   let p = String(texto == null ? '' : texto);
   if(!pareceFemenino(p)) return p;
+  // En una toma del ANTES no va NADA de lo del después: ni el candado sexy, ni
+  // la pose de sostenerse las zonas, ni el rebote. Solo el candado del antes.
+  if(esTomaAntes(p)){
+    if(p.indexOf('BODY LOCK') < 0) p += '\n\n' + REGLA_CUERPO_ANTES;
+    return p;
+  }
   const conCuerpo = muestraCuerpo(p);
   const recorre = conCuerpo && hayRecorridoCamara(p);
-  if(p.indexOf('FEMALE BODY LOCK') < 0) p += '\n\n' + REGLA_CUERPO_FEMENINO;
+  if(p.indexOf('BODY LOCK') < 0) p += '\n\n' + REGLA_CUERPO_FEMENINO;
   if(conCuerpo && p.indexOf('POSE:') < 0) p += '\n' + REGLA_POSE_CUERPO;
   if(recorre && p.indexOf('BODY MOTION') < 0) p += '\n' + REGLA_MOVIMIENTO_CUERPO;
   return p;
@@ -8575,9 +8657,7 @@ function renderStepsNavAnimado(activeIdx){
 }
 
 let _focoApagado = false;
-function activarInmersion(activa){
-  document.body.classList.toggle('inmersivo', !!activa && !_focoApagado);
-}
+// (la activarInmersion real, por pestaña, está más abajo — esta versión vieja se quitó)
 function alternarFoco(){
   _focoApagado = !_focoApagado;
   try{ localStorage.setItem('fragua_foco_apagado', _focoApagado ? '1' : '0'); }catch(e){}
