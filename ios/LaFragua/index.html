@@ -9151,6 +9151,10 @@ const TOMA_CONTINUA = 'Single continuous take, no cuts or scene changes.';
 
 async function generarVideoEnCadena(prompt, refUrls, aspecto, setStatus, duracion){
   if(esDelModoAnimado()) prompt = forzarEstilo(prompt);
+  // El candado del desplazamiento va aquí también: así lo llevan TODOS los videos
+  // —b-roll, setup, caja de herramientas—, no solo las tomas del storyboard. Es
+  // idempotente: si ya lo trae puesto, no se repite.
+  prompt = forzarDesplazamiento(prompt);
   if(String(prompt||'').toLowerCase().indexOf('single continuous take') < 0){
     prompt = String(prompt||'').trim() + '\n' + TOMA_CONTINUA;
   }
@@ -9723,6 +9727,43 @@ function forzarCuerpoFemenino(prompt, fase){
   // En el ANTES manda el candado contrario: nada de curvas ni de mejorar el cuerpo.
   return p + '\n\n' + (antes ? REGLA_CUERPO_ANTES : REGLA_CUERPO_FEMENINO);
 }
+/* ------------------------------------------------------------------
+   «CAMINA PERO NO SE MUEVE, SE QUEDA EN EL MISMO SITIO»
+   Su toma 11. Los modelos de imagen-a-video, cuando la escena solo dice «ella
+   camina entre las mesas», entregan una foto viva: el sujeto se balancea en el
+   sitio y lo único que se mueve es la cámara o el fondo. Hay que pedir el
+   DESPLAZAMIENTO explícitamente, y decir además lo que NO se quiere, que es lo
+   que de verdad cambia el resultado.
+   Solo se pega cuando la acción habla de moverse: en un primer plano de una cara
+   este candado sobra y encima confundiría al modelo.
+------------------------------------------------------------------ */
+const REGLA_DESPLAZAMIENTO =
+  'MOTION LOCK (mandatory): this is a MOVING shot, not a still photo with a moving camera. ' +
+  'The character physically travels through the space — their position against the background ' +
+  'clearly changes between the first frame and the last frame of the clip. Full-body locomotion: ' +
+  'weight shifting from foot to foot, alternating steps that cover real ground, natural arm swing, ' +
+  'hair and fabric reacting to the movement, the floor passing underneath. ' +
+  'Do NOT deliver a near-static subject swaying or stepping in place while only the camera, ' +
+  'the background or the clothing moves.';
+
+/// Cuidado con las palabras que se escriben igual y no son moverse: «running
+/// water», «on sale», «green leaves», «in March». Por eso las ambiguas piden su
+/// acompañante («leaves the», «runs toward») en vez de ir sueltas.
+function hayDesplazamiento(txt){
+  const s = String(txt || '').toLowerCase();
+  const claras = /\b(walks?|walking|walked|jogs?|jogging|strides?|striding|enters?|entering|approach(es|ing)?|cross(es|ing)?|climbs?|climbing|descends?|paces|struts?|strutting|wanders?|sprints?)\b/;
+  const conCompania = /\b(runs?|running)\s+(toward|towards|to |away|into|out|down the|up the|across|along|past)|\bleaves\s+(the|through|her|his|its|behind)|\bexits\s+(the|through)|\bsteps?\s+(forward|toward|towards|into|out|onto|off)|\bturns?\s+around|\bsits?\s+down|\bstands?\s+up|\bgets?\s+up|\bjumps?\s+(up|over|onto|off|down)|\bdanc(es|ing)\b|\bspins?\s+around/;
+  const espanol = /\bcamina|caminando|corre\b|corriendo|entra\s+(a|al|en|por)|sale\s+(de|del|por|a\s)|se acerca|acerc[áa]ndose|cruza|atraviesa|sube\s+(las|por|la)|baja\s+(las|por|la)|se da la vuelta|se voltea|se sienta|se levanta|salta\b|baila|recorre a pie|se aleja|da unos pasos/;
+  return claras.test(s) || conCompania.test(s) || espanol.test(s);
+}
+
+function forzarDesplazamiento(texto){
+  let p = String(texto == null ? '' : texto);
+  if(p.indexOf('MOTION LOCK') >= 0) return p;
+  if(!hayDesplazamiento(p)) return p;
+  return p + '\n\n' + REGLA_DESPLAZAMIENTO;
+}
+
 /// VIDEO: candado del cuerpo + la pose (manos sosteniendo cada zona, risa
 /// picarona) si muestra el cuerpo + el rebote si la cámara lo recorre.
 /// Todo decidido sobre el original antes de añadir nada.
@@ -10420,6 +10461,8 @@ function armarPromptToma(n, e, avisar){
   if(extra) texto = texto + '\n' + extra;
   // Cuerpo femenino + movimiento sexy (rebote y manos) si la toma revela el cuerpo.
   texto = forzarVideoFemenino(texto, (state.fases||{})['toma-'+n]);
+  // Y si la escena dice que se desplaza, que se desplace de verdad (ver la toma 11).
+  texto = forzarDesplazamiento(texto);
 
   const refs = refsMarcadasToma(n);
   // RED DE SEGURIDAD DE LA CARA. Si en la escena hay una persona —aunque solo sea
