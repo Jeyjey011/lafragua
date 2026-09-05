@@ -11378,6 +11378,7 @@ function guardarProyecto(){
     const registro = {nombre: state.proyectoAbierto, fecha: new Date().toISOString(), datos: sinDataUrls(instantaneaTrabajo())};
     if(i >= 0) lista[i] = registro; else lista.push(registro);
     guardarListaProyectos(lista);
+    try{ copiaEnDisco(true); }catch(e){}
     toast('Guardado en «'+state.proyectoAbierto+'» ✓');
     return;
   }
@@ -11400,6 +11401,7 @@ function guardarProyecto(){
       }).catch(()=>{});
     }
   }catch(e){}
+  try{ copiaEnDisco(true); }catch(e){}
   toast('Proyecto «'+nombre+'» creado ✓');
 }
 /* ============================================================
@@ -11443,9 +11445,44 @@ function guardadoAutomatico(){
   if(guardarListaProyectos(lista)){
     _firmaGuardada = firma;
     pintarGuardadoAuto(new Date());
+    try{ copiaEnDisco(false); }catch(e){}
   }else{
+    // Si el navegador ya no deja escribir, la copia en disco es lo ÚNICO que va a
+    // quedar: se hace ya, sin esperar los diez minutos.
     pintarGuardadoAuto(null);
+    try{ copiaEnDisco(true); }catch(e){}
   }
+}
+
+/* ============================================================
+   UNA COPIA EN DISCO, FUERA DEL NAVEGADOR
+   Todo el proyecto —guion, storyboard, plan, qué se generó, las ediciones— vivía
+   ÚNICAMENTE en el almacén del navegador. En disco solo estaban las imágenes y
+   los videos sueltos: si ese almacén se limpia o se corrompe, sobreviven los
+   archivos pero no queda ni rastro de a qué proyecto pertenecían, ni el guion,
+   ni el gasto. Y limpiar el almacén no es una rareza: pasa al reinstalar, al
+   borrar datos del WebView, o cuando el navegador decide que ha crecido mucho.
+   Esto deja el proyecto entero como .json dentro de su carpeta, con fecha, y se
+   queda con las últimas 20 copias. No cuesta ninguna llamada a ninguna API.
+============================================================ */
+let _ultimaCopiaDisco = 0;
+function copiaEnDisco(forzar){
+  if(!state.proyectoAbierto) return;
+  if(!(window.fragua && window.fragua.guardarTexto)) return;   // en el navegador suelto no hay disco
+  const ahora = Date.now();
+  if(!forzar && ahora - _ultimaCopiaDisco < 600000) return;    // cada diez minutos basta
+  _ultimaCopiaDisco = ahora;
+  try{
+    // MISMO FORMATO QUE «📤 Llevarme el trabajo», a propósito: así el archivo se
+    // recupera con «📥 Traer de un archivo», que es un camino que ya existe y ya
+    // está probado. Una copia que no se pueda restaurar no es una copia.
+    // Sin las llaves: este archivo se queda en el disco sin que nadie lo pida.
+    const paquete = recogerTodo(false);
+    paquete._automatica = true;
+    paquete._proyecto = state.proyectoAbierto;
+    window.fragua.guardarTexto('copia', JSON.stringify(paquete), 'copia-del-proyecto', '.json', 20)
+      .catch(()=>{});
+  }catch(e){}
 }
 
 function pintarGuardadoAuto(cuando){
@@ -11457,7 +11494,7 @@ function pintarGuardadoAuto(cuando){
     return;
   }
   const h = cuando.toLocaleTimeString('es-CO', {hour:'2-digit', minute:'2-digit'});
-  el.innerHTML = '<span title="Se guarda solo cada 15 segundos mientras haya un proyecto abierto">💾 guardado ' + h + '</span>';
+  el.innerHTML = '<span title="Se guarda solo cada 15 segundos mientras haya un proyecto abierto. Y cada diez minutos deja además una copia .json en la carpeta del proyecto (copia-del-proyecto), fuera del navegador: si el navegador pierde sus datos, esa copia se recupera con «📥 Traer de un archivo».">💾 guardado ' + h + '</span>';
   el.classList.remove('hidden');
 }
 
@@ -13815,7 +13852,7 @@ async function montarVideoFinal(){
       cont.innerHTML = `
         <div class="card">
           <h4><span class="title-txt">🎬 Video final listo</span></h4>
-          <div class="es-explain" style="margin-top:8px;"><b>${r.tomas} tomas montadas.</b> El archivo está en la carpeta del proyecto — la app no puede reproducirlo aquí dentro, ábrelo con tu reproductor.</div>
+          <div class="es-explain" style="margin-top:8px;"><b>${r.tomas} de ${r.pedidas || r.tomas} tomas montadas${(r.bloques && r.bloques !== r.tomas) ? ', en ' + r.bloques + ' bloques (hay locuciones que cubren más de una escena)' : ''}.</b> El archivo está en la carpeta del proyecto — la app no puede reproducirlo aquí dentro, ábrelo con tu reproductor.</div>
           <div class="toolkit-note mono" style="word-break:break-all;">${escapeHtml(r.ruta)}</div>
           ${r.avisos ? `<div class="warn-row">${escapeHtml(r.avisos)}</div>` : ''}
           <button class="btn small" id="btnAbrirCarpetaVideo" style="margin-top:8px;">📂 Abrir la carpeta</button>
