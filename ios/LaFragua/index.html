@@ -5214,6 +5214,20 @@ const SETUP_REFS_NEEDED = {
   suplemento_sirviendo: ['producto'],
   suplemento_tomando: ['modelo']
 };
+/// LA FASE DE UN CONTEXTO DE GENERACIÓN. Además de lo que hayas fijado a mano,
+/// el propio id puede decirla: los setup del modo real se llaman literalmente
+/// «antes» y «despues». Esa señal se estaba tirando, y el candado del cuerpo
+/// acababa adivinando por el texto justo en las DOS imágenes donde más importa
+/// acertar — que son el antes y el después.
+function faseDeContexto(contextId){
+  const guardada = (state.fases || {})[contextId];
+  if(guardada) return guardada;
+  const id = String(contextId == null ? '' : contextId).toLowerCase();
+  if(/(^|[-_])antes([-_]|$)/.test(id)) return 'antes';
+  if(/(^|[-_])despu[eé]s([-_]|$)/.test(id)) return 'despues';
+  return '';
+}
+
 function resolverRefs(contextId){
   const necesita = SETUP_REFS_NEEDED[contextId];
   if(!necesita) return {refs:[state.assets.modelo, state.assets.producto].filter(Boolean), faltan:[]};
@@ -5241,8 +5255,9 @@ async function wsGenerateImageSmart(prompt, refUrls, contextId, statusCb, aspect
   // sola de esas reglas. Se aplican las mismas, con los mismos detectores, así que
   // una foto de producto o un fondo siguen sin recibir nada.
   try{
-    prompt = forzarCuerpoFemenino(prompt, (state.fases||{})[contextId] || '');
-    prompt = forzarAtrevimiento(prompt, (state.fases||{})[contextId] || '');
+    const fase = faseDeContexto(contextId);
+    prompt = forzarCuerpoFemenino(prompt, fase);
+    prompt = forzarAtrevimiento(prompt, fase);
     // El límite duro va SIEMPRE que haya una persona, aunque el nivel sea discreto
     // y no haya metido el candado de vestuario.
     if(pareceFemenino(prompt) && prompt.indexOf('HARD LIMITS') < 0){
@@ -10295,10 +10310,24 @@ function escenaLlevaPersona(e){
   }catch(err){}
   return false;
 }
+/// ¿ESTA TOMA ES DEL ANTES O DEL DESPUÉS? Manda lo que hayas fijado a mano o lo
+/// que dijo la auditoría DE TOMAS; si no hay nada, lo que dice la escena.
+/// AQUÍ HABÍA UN AGUJERO: el candado del cuerpo y el del vestuario leían solo
+/// `state.fases['toma-N']`, que únicamente se rellena al auditar las TOMAS o al
+/// darle a «🔧 Arreglar prompt» una por una. Así que la fase que decidía la
+/// auditoría del STORYBOARD —que es la que reparte el antes y el después de todo
+/// el anuncio— no llegaba al prompt del video: el candado caía de vuelta en
+/// adivinar por el texto, y por eso una toma del después salía con el cuerpo del
+/// antes. Ahora la escena cuenta como segunda opinión, igual que ya hacía la
+/// elección de la hoja de personaje.
+function faseDeLaToma(n, e){
+  return (state.fases || {})['toma-' + n] || (e && e.fase) || '';
+}
+
 /// La hoja de personaje que le toca a ESTA toma, por su fase. Se apoya en la
 /// misma lógica que ya usan las imágenes del plan para no repetir el criterio.
 function hojaParaLaToma(n, e){
-  const fase = (state.fases || {})['toma-' + n] || (e && e.fase) || '';
+  const fase = faseDeLaToma(n, e);
   const falso = {
     fase: fase,
     ref_de: [],
@@ -10500,7 +10529,7 @@ function armarPromptToma(n, e, avisar){
   const extra = ((document.getElementById('vidextra-'+n)||{}).value || '').trim();
   if(extra) texto = texto + '\n' + extra;
   // Cuerpo femenino + movimiento sexy (rebote y manos) si la toma revela el cuerpo.
-  texto = forzarVideoFemenino(texto, (state.fases||{})['toma-'+n]);
+  texto = forzarVideoFemenino(texto, faseDeLaToma(n, e));
   // Y si la escena dice que se desplaza, que se desplace de verdad (ver la toma 11).
   texto = forzarDesplazamiento(texto);
 
@@ -10907,7 +10936,7 @@ function renderTomasFinales(escenas){
       if(esDelModoAnimado()) texto = forzarEstilo(texto);
       _currentGenId = guardaId;
       if(texto.toLowerCase().indexOf('single continuous take') < 0) texto += '\n' + TOMA_CONTINUA;
-      const esAntes = esAntesDe(texto, (state.fases||{})['toma-'+n]);
+      const esAntes = esAntesDe(texto, faseDeLaToma(n, e));
       const caras = (quienes||[]).filter(x=>x.nombre).map(x=>x.nombre);
       mostrarAvisoModal('👁️ Esto es lo que se le manda al proveedor',
         '<div class="es-explain">Toma ' + n + ' · ' + segs + ' s · ' + refs.length + ' ' +
