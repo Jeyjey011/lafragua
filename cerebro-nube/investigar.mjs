@@ -86,8 +86,13 @@ console.log('Hallazgos: ' + h.hallazgos.length + ' · reglas nuevas: ' + h.regla
 //    el dueño tampoco vuelven a entrar.
 function reglaRestrictiva(t) {
   const s = ' ' + norm(t) + ' ';
-  // política de plataformas: fuera siempre
-  if (/(meta|tiktok|facebook|instagram|politic|complian|moderacion|censur|prohibid|restricc|rechaz|ftc|claim)/.test(s)) return true;
+  // MISMO FILTRO QUE LA APP, LETRA POR LETRA. Y con el mismo arreglo: «meta» iba
+  // suelto y casaba DENTRO de «metafora», así que este cerebro —que es el
+  // CREATIVO— tiraba a la basura, en silencio y cada noche, justo las reglas
+  // sobre metáforas visuales, que son de lo mejor que puede traer. Los que pueden
+  // esconderse dentro de otra palabra van con límite de palabra; los largos no.
+  if (/\b(meta|ftc|claim|claims)\b/.test(s)) return true;
+  if (/(tiktok|facebook|instagram|politic|complian|moderacion|censur|prohibid|restricc|rechaz)/.test(s)) return true;
   // un verbo de recorte apuntando a la fórmula de la casa: fuera
   const recorta = /(sustituye|sustituir|reemplaza|suaviza|evita|elimina|quita|reduce|modera|no uses|no muestres|no hagas|en lugar de|en vez de)/.test(s);
   const laFormula = /(antes|despues|transformacion|corporal|cuerpo|agresiv|lenguaje|tono|sin censura|neuromarketing|gluteo|busto|cintura|peso|extrem)/.test(s);
