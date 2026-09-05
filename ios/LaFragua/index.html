@@ -12704,17 +12704,27 @@ async function sincronizarCerebro(silencioso){
     remoto.reglas = remoto.reglas || [];
     remoto.historial = remoto.historial || [];
 
-    // 2. Lo mío, con marca de quién lo aprendió. Las reglas de producto viajan
-    //    con el prefijo PRODUCTO: para que cada máquina las reconozca al bajar.
-    const misReglas = (state.gustos || '').split('\n').map(t=>t.trim()).filter(Boolean)
-      .map(t=>({t:t, f:new Date().toISOString(), de:c.equipo}))
-      .concat(reglasProducto().map(t=>({t:'PRODUCTO: '+t, f:new Date().toISOString(), de:c.equipo})));
-    const miHistorial = historial();
-
     // 3. Fundir. Las reglas se comparan sin acentos ni mayúsculas para no
     //    duplicar la misma idea escrita de dos formas.
     // Se colapsan los espacios: "frases  cortas" y "frases cortas" son la misma regla.
     const norm = s => String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,'').replace(/\s+/g," ").trim();
+
+    // 2. Lo mío, con marca de quién lo aprendió. Las reglas de producto viajan
+    //    con el prefijo PRODUCTO: para que cada máquina las reconozca al bajar.
+    // LA FECHA NO SE REESCRIBE EN CADA SINCRONIZACIÓN. Antes todas mis reglas se
+    // sellaban con la hora de AHORA, así que siempre salían las más nuevas: al
+    // recortar a las 40 últimas, lo primero en caerse era lo que había aprendido
+    // el cerebro nocturno o la otra máquina. O sea, la investigación que se paga
+    // cada noche entraba y se iba a la basura en la siguiente sincronización.
+    // Ahora una regla que ya existía conserva SU fecha; solo lo nuevo lleva la de hoy.
+    const fechaQueYaTenia = {};
+    (remoto.reglas || []).forEach(r=>{ if(r && r.t && r.f) fechaQueYaTenia[norm(r.t)] = r.f; });
+    const ahoraISO = new Date().toISOString();
+    const conFecha = (t)=>({t:t, f: fechaQueYaTenia[norm(t)] || ahoraISO, de:c.equipo});
+    const misReglas = (state.gustos || '').split('\n').map(t=>t.trim()).filter(Boolean)
+      .map(conFecha)
+      .concat(reglasProducto().map(t=>conFecha('PRODUCTO: '+t)));
+    const miHistorial = historial();
     // LAS VETADAS: reglas que el dueño rechazó. No entran JAMÁS, vengan de donde
     // vengan — ni de la nube, ni de otra máquina que aún las tenga en local.
     const vetadas = new Set((remoto.vetadas || []).map(norm).concat(vetadasLocales()));
