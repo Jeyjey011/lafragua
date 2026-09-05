@@ -181,9 +181,13 @@ main{max-width:1220px; margin:0 auto; padding:0 28px 100px;}
 .tarjeta-aviso{max-width:min(92vw,480px); text-align:left; max-height:86vh; overflow-y:auto;}
 .tarjeta-aviso > b{font-size:20px; margin-bottom:12px;}
 .tarjeta-aviso span b{color:var(--text); font-weight:700;}
+/* Con diez versiones de golpe esto se salía de la pantalla y no había forma de
+   llegar a los botones. Ahora la lista tiene su propio alto y su scroll. */
 .lista-cambios{margin-top:10px; text-align:left;
-  border-left:2px solid var(--calm-dim); padding-left:12px;}
-.lista-cambios > div{font-size:13px; line-height:1.5; margin-bottom:10px; color:var(--text-dim);}
+  border-left:2px solid var(--calm-dim); padding-left:12px;
+  max-height:48vh; overflow-y:auto; padding-right:6px;}
+.lista-cambios > div{font-size:13px; line-height:1.5; margin-bottom:10px; color:var(--text-dim);
+  overflow-wrap:anywhere;}   /* una ruta larga no puede sacar barra horizontal */
 .lista-cambios .v{display:inline-block; font-family:'JetBrains Mono',monospace; font-size:11px;
   color:var(--calm); background:var(--bg-panel-3); border-radius:5px; padding:1px 6px; margin-right:6px;}
 .tarjeta-aviso span{font-size:14px; line-height:1.6;}
@@ -12789,8 +12793,12 @@ function reglasProducto(){
   return (localStorage.getItem('fragua_reglas_producto') || '').split('\n').map(s=>s.trim()).filter(Boolean);
 }
 function apuntarReglaProducto(texto){
-  const t = String(texto||'').replace(/\s+/g,' ').trim().slice(0, 220);
+  const t = limpiarRegla(texto);
   if(!t) return;
+  // Mismo cuidado que con las reglas de escritura: si el verificador contesta
+  // «no puedo determinar…» eso NO es una regla, y quedaría pegado para siempre
+  // en todos los prompts que llevan producto.
+  try{ if(!esReglaDeVerdad(t)) return; }catch(e){}
   const lista = reglasProducto();
   const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,'').trim();
   if(lista.some(x=>norm(x) === norm(t))) return;
