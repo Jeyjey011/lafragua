@@ -6026,10 +6026,13 @@ async function arrancarCola(){
   // larga de lo estimado y su video sube de segundos—, se para y se pregunta en
   // vez de seguir gastando tu dinero sobre un número que ya no vale.
   if(!state.animado) state.animado = {};
+  // Se congela por ID COMPLETO, no por el número de toma: así también quedan
+  // apuntadas las tomas habladas del UGC y los b-roll, que también son video y
+  // antes se quedaban fuera de la comparación.
   state.animado.cotizadoSeg = {};
   ids.forEach(x=>{
-    const nn = (x.match(/^vid-(\d+)$/)||[])[1];
-    if(nn) state.animado.cotizadoSeg[nn] = segundosProbablesDeVideo(nn);
+    if(kindDeGeneracion(x) !== 'video') return;
+    state.animado.cotizadoSeg[x] = segundosDeGeneracion(x);
   });
   let yaPreguntado = false;
 
@@ -6040,11 +6043,16 @@ async function arrancarCola(){
     if(!yaPreguntado && iCola > 0){
       const quedan = ids.slice(iCola).filter(x => !(state.generados||{})[x]);
       const ahora = costeDeLaCola(quedan);
+      // La clase, igual que en costeDeLaCola: por el prefijo, take- y broll- se
+      // tomaban por imágenes aquí y por videos allá, y esa diferencia sola bastaba
+      // para disparar el aviso de «subieron de precio» sin que hubiera subido nada.
       const antes = quedan.reduce((t,x)=>{
-        const k = x.indexOf('vid-')===0 ? 'video' : x.indexOf('voz-')===0 ? 'audio' : 'imagen';
-        const nn = (x.match(/^(?:vid|voz)-(\d+)$/)||[])[1];
-        return t + costeDe(k, k==='video' ? {segundos:(((state.animado||{}).cotizadoSeg||{})[nn] || 5)} :
-                              k==='audio' ? {caracteres:300} : {});
+        const k = kindDeGeneracion(x);
+        if(k === 'video'){
+          const cong = ((state.animado||{}).cotizadoSeg||{})[x];
+          return t + costeDe('video', {segundos: cong || segundosDeGeneracion(x)});
+        }
+        return t + costeDe(k, k === 'audio' ? {caracteres: 300} : {});
       }, 0);
       if(ahora > antes * 1.25 && ahora - antes > 0.15){
         yaPreguntado = true;
@@ -8780,20 +8788,52 @@ function bindDobleFormato(idBase, refsExtra, etiquetas){
 
 // Genera en cadena TODOS los formatos de una tanda, saltando lo ya generado.
 // Va de uno en uno a propósito: en paralelo los proveedores empiezan a rechazar por saturación.
-async function generarTandaCompleta(ids, idBoton, idEstado){
+async function generarTandaCompleta(ids, idBoton, idEstado, sinPreguntar){
   const btn = document.getElementById(idBoton);
   const st = document.getElementById(idEstado);
+  const yaEsta = (id)=>{ const c = document.getElementById('genresult-'+id); return !!(c && c.querySelector('img')); };
+  const faltan = (ids||[]).filter(id => !yaEsta(id));
+  if(!faltan.length){ toast('Ya están generadas todas las de esta tanda'); return; }
+
+  // EL PRECIO, ANTES DE GASTARLO. Este botón se lleva de golpe las catorce
+  // imágenes de una tanda de Creatividades o de Variaciones y no decía ni cuántas
+  // ni cuánto. La cola de las tomas y el plan de imágenes sí lo preguntan desde
+  // hace tiempo; esta era la última que gastaba a ciegas.
+  if(!sinPreguntar){
+    const coste = faltan.reduce((t,id)=>{
+      const k = kindDeGeneracion(id);
+      return t + costeDe(k, opcionesDeCoste(id, k));
+    }, 0);
+    const seguir = await mostrarAvisoModal('Generar ' + faltan.length +
+      (faltan.length===1 ? ' imagen de esta tanda' : ' imágenes de esta tanda'),
+      '<div class="es-explain" style="text-align:left;">Faltan <b>' + faltan.length + '</b> de ' + ids.length +
+      '.<br><br>Coste aproximado: <b>' + enLasDosMonedas(coste) + '</b> con los precios que tienes puestos.<br><br>' +
+      'Van una a una. Lo ya generado no se repite ni se vuelve a cobrar.</div>',
+      [{id:'ya', texto:'Generarlas', principal:true}, {id:'no', texto:'Ahora no'}]);
+    if(seguir !== 'ya') return;
+  }
+
   if(btn) btn.disabled = true;
-  let hechas = 0, fallos = 0;
+  let hechas = 0, fallos = 0, seguidos = 0;
   for(let i=0;i<ids.length;i++){
     const id = ids[i];
-    const cont = document.getElementById('genresult-'+id);
-    if(cont && cont.querySelector('img')){ hechas++; continue; }   // ya estaba
+    if(yaEsta(id)){ hechas++; continue; }   // ya estaba
     if(st) st.textContent = ` generando ${i+1} de ${ids.length}...`;
     const btnGen = document.querySelector(`[data-gen="${id}"]`);
     if(!btnGen){ fallos++; continue; }
     await btnGen.onclick();
-    if(cont && cont.querySelector('img')) hechas++; else fallos++;
+    if(yaEsta(id)){ hechas++; seguidos = 0; }
+    else {
+      fallos++; seguidos++;
+      // TRES SEGUIDAS QUE FALLAN NO SON MALA SUERTE. Suele ser la llave que falta o
+      // el proveedor caído: seguir es esperar catorce veces el mismo error.
+      if(seguidos >= 3){
+        if(st) st.textContent = ` me paré: fallaron ${seguidos} seguidas. Suele ser la llave del proveedor o que está caído — mira el aviso de una tarjeta, arréglalo y vuelve a darle. Lo hecho no se repite.`;
+        if(btn) btn.disabled = false;
+        refreshAllRefChips();
+        return;
+      }
+    }
   }
   if(st) st.textContent = ` listo: ${hechas} de ${ids.length} generadas` + (fallos?` · ${fallos} fallaron, revisa cada tarjeta`:'');
   if(btn) btn.disabled = false;
