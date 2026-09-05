@@ -12554,11 +12554,33 @@ function apuntarOriginal(clave, texto){
   if(state.originalesPrompt[clave] === undefined) state.originalesPrompt[clave] = texto;
 }
 
+/* SE APUNTA CUANDO DEJAS DE ESCRIBIR, NO MIENTRAS ESCRIBES.
+   Esto se llamaba en CADA pulsación, así que se guardaba una «corrección» por
+   cada letra: «senos l», «senos la», «senos las»… Después el destilador leía esa
+   lista y deducía barbaridades — literalmente había reglas guardadas del tipo
+   «completa frases inconclusas», «elimina la segunda oración o dilúyela hasta
+   hacerla ilegible» y «sustituye descripciones físicas específicas por términos
+   generales abstractos», que es lo CONTRARIO de lo que vende aquí. Y esas reglas
+   se le pegaban a todos los prompts. Ahora se espera a que pares dos segundos y
+   se apunta una sola vez, con el texto ya terminado. */
+const _correccionPendiente = {};
 function apuntarCorreccion(clave, textoNuevo){
+  clearTimeout(_correccionPendiente[clave]);
+  _correccionPendiente[clave] = setTimeout(()=>{
+    delete _correccionPendiente[clave];
+    try{ apuntarCorreccionYa(clave, textoNuevo); }catch(e){}
+  }, 2200);
+}
+
+function apuntarCorreccionYa(clave, textoNuevo){
   const antes = (state.originalesPrompt || {})[clave];
   if(antes === undefined || antes === textoNuevo) return;
   // Cambios de una o dos letras no enseñan nada.
   if(Math.abs((antes||'').length - (textoNuevo||'').length) < 12 && antes.slice(0,60) === textoNuevo.slice(0,60)) return;
+  // Y UN TEXTO A MEDIO ESCRIBIR TAMPOCO. Si lo nuevo es un PREFIJO de lo viejo
+  // —o al revés— es que estabas en mitad de la palabra, no corrigiendo nada.
+  const a = String(antes || ''), b = String(textoNuevo || '');
+  if(a && b && (a.indexOf(b) === 0 || b.indexOf(a) === 0) && Math.abs(a.length - b.length) < 40) return;
 
   if(!state.correcciones) state.correcciones = [];
   state.correcciones.push({
@@ -12591,11 +12613,23 @@ async function destilarGustos(silencioso){
       'sustituye siempre. Máximo 8 reglas, una línea cada una, empezando por un verbo. ' +
       'Nada de generalidades tipo "sé claro": si no ves un patrón real, devuelve menos reglas. ' +
       'Responde SOLO la lista, sin introducción.';
-    const reglas = (await callClaude(sistema, muestra, 2000) || '').trim();
+    const crudo = (await callClaude(sistema, muestra, 2000) || '').trim();
+    // SE CRIBA LO QUE VUELVE. Cuando no hay patrón, el modelo contesta con una
+    // frase y esa frase se guardaba como regla (ver esReglaDeVerdad). Y si de esta
+    // tanda no sale NADA aprovechable, se deja lo que ya había: una tanda mala no
+    // puede borrarte las reglas buenas de las anteriores, que es lo que pasaba.
+    const buenas = crudo.split('\n')
+      .map(l => limpiarRegla(l.replace(/^\s*[-•*\d.)]+\s*/, '')))
+      .filter(l => l && esReglaDeVerdad(l) && !reglaRestrictiva(l));
+    localStorage.setItem('fragua_gustos_en', String(c.length));
+    if(!buenas.length){
+      if(!silencioso) toast('De estas correcciones no sale ningún patrón claro — se queda lo que ya habías aprendido');
+      return;
+    }
+    const reglas = buenas.join('\n');
     if(reglas){
       state.gustos = reglas;
       localStorage.setItem('fragua_gustos', reglas);
-      localStorage.setItem('fragua_gustos_en', String(c.length));
       // Lo recién aprendido se sube al momento, para que los demás equipos lo tengan.
       if(hayCerebroCompartido()) sincronizarCerebro(true);
       if(!silencioso){
@@ -12687,6 +12721,14 @@ async function sincronizarCerebro(silencioso){
     // gustos y desde ahí se le pega a cada prompt. Es exactamente la clase de
     // regla que se pelea con la del después.
     const reglas = fundir(misReglas, remoto.reglas, x=>norm(x.t), 40)
+      // Se limpia ANTES de comparar y de guardar: el marcado de las citas que trae
+      // la búsqueda web acababa dentro de los prompts (ver limpiarRegla).
+      .map(x => Object.assign({}, x, {t: limpiarRegla(x.t)}))
+      .filter(x => x.t)
+      // Y fuera las que no son reglas: el cerebro real llegó a tener DIECIOCHO
+      // frases del tipo «No hay patrón accionable…» guardadas como si lo fueran.
+      // Las de PRODUCTO: no pasan por aquí, que son otra cosa.
+      .filter(x => /^PRODUCTO:/i.test(x.t) || esReglaDeVerdad(x.t))
       .filter(x=>!vetadas.has(norm(x.t)))
       .filter(x=>{ try{ return !reglaRestrictiva(x.t); }catch(e){ return true; } });
     const hist   = fundir(miHistorial, remoto.historial,
@@ -12808,6 +12850,31 @@ function pintarJarvis(){
 function normRegla(s){
   return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();
 }
+/* UNA REGLA ES UNA LÍNEA, NO UN PÁRRAFO CON XML DENTRO.
+   El cerebro nocturno investiga con búsqueda web, y en la respuesta se le colaba
+   el marcado de las citas tal cual: reglas guardadas con «(cite index="14-12">…
+   </cite>» pegado en medio. Y esas reglas NO se quedan ahí quietas: se inyectan
+   en CADA prompt que escribe la app. O sea, se le estaba mandando media etiqueta
+   XML al modelo de imagen, en todas las generaciones, y encima ocupando 400
+   caracteres del prompt. Se limpia al entrar y al sincronizar, así que las que ya
+   están guardadas también quedan limpias en la próxima vuelta. */
+const LARGO_MAX_REGLA = 240;
+function limpiarRegla(t){
+  let s = String(t == null ? '' : t);
+  // La apertura llega de las dos formas: «<cite index="…">» y, tal cual se ha
+  // visto en el gist, «(cite index="…">» — con paréntesis y sin cerrarlo nunca.
+  s = s.replace(/[<(]\s*cite\b[^>]{0,300}>/gi, '');
+  s = s.replace(/<\s*\/\s*cite\s*>/gi, '').replace(/\)?\s*<\/cite>/gi, '');
+  s = s.replace(/<[^<>]{0,120}>/g, '');                // cualquier otra etiqueta suelta
+  s = s.replace(/\bindex\s*=\s*"[^"]*"/gi, '');
+  s = s.replace(/\s*\(\s*\)/g, '').replace(/\s+([,.;:])/g, '$1');
+  s = s.replace(/\s+/g, ' ').trim();
+  if(s.length > LARGO_MAX_REGLA){
+    const corte = s.lastIndexOf(' ', LARGO_MAX_REGLA - 1);
+    s = s.slice(0, corte > 80 ? corte : (LARGO_MAX_REGLA - 1)).replace(/[\s,;:.]+$/, '') + '.';
+  }
+  return s;
+}
 function vetadasLocales(){
   try{ return JSON.parse(localStorage.getItem('fragua_vetadas')||'[]'); }catch(e){ return []; }
 }
@@ -12831,9 +12898,44 @@ function reglaRestrictiva(t){
   // largos se quedan como estaban, porque ahí no hay confusión posible.
   if(/\b(meta|ftc|claim|claims)\b/.test(s)) return true;
   if(/(tiktok|facebook|instagram|politic|complian|moderacion|censur|prohibid|restricc|rechaz)/.test(s)) return true;
-  const recorta = /(sustituye|sustituir|reemplaza|suaviza|evita|elimina|quita|reduce|modera|no uses|no muestres|no hagas|en lugar de|en vez de)/.test(s);
-  const laFormula = /(antes|despues|transformacion|corporal|cuerpo|agresiv|lenguaje|tono|sin censura|neuromarketing|gluteo|busto|cintura|peso|extrem)/.test(s);
+  // «generaliza» y «diluye» son verbos de recorte igual que «suaviza»: se colaron
+  // dos reglas reales —«sustituye descripciones FÍSICAS específicas por términos
+  // generales abstractos» y «generaliza términos específicos de características
+  // físicas»— que son justo lo contrario de la fórmula de la casa, y que llevaban
+  // metidas en TODOS los prompts. El filtro no las cazaba porque «físicas» y
+  // «específicas» no estaban en la lista de lo que hay que proteger.
+  const recorta = /(sustituye|sustituir|reemplaza|suaviza|evita|elimina|quita|reduce|modera|generaliza|generalizar|diluye|dilu[yi]|abstrae|no uses|no muestres|no hagas|en lugar de|en vez de)/.test(s);
+  const laFormula = /(antes|despues|transformacion|corporal|cuerpo|agresiv|lenguaje|tono|sin censura|neuromarketing|gluteo|busto|cintura|peso|extrem|fisic|especific|explicit|descripcion)/.test(s);
   return recorta && laFormula;
+}
+
+/* UNA REGLA TIENE QUE SER UNA REGLA.
+   Cuando el destilador no ve un patrón, el modelo contesta con una frase: «No hay
+   patrón accionable. Los ejemplos muestran solo variaciones aleatorias…». Esa
+   frase se guardaba TAL CUAL como si fuera una regla, se subía al cerebro
+   compartido y desde ahí se le pegaba a cada prompt que escribe la app. En el
+   cerebro real había DIECIOCHO de estas, más trozos sueltos de una lista («-
+   "glúteos redondos" → "cuerpo perfecto"», «El único cambio consistente es:»).
+   Eso son cientos de caracteres de ruido dentro de cada generación. */
+const NO_ES_REGLA = [
+  /^no hay\b/i, /^no se puede\b/i, /^no se detect/i, /^no encuentro\b/i, /^no existe\b/i,
+  /^no puedo\b/i, /^no es posible\b/i, /^sin patr[oó]n/i, /^dada la falta\b/i,
+  /^los ejemplos\b/i, /^estos ejemplos\b/i, /^el [uú]nico cambio\b/i, /^el redactor\b/i,
+  /^ninguna regla\b/i, /^[-•*]\s/, /:\s*$/
+];
+function esReglaDeVerdad(t){
+  const s = limpiarRegla(t);
+  if(s.length < 15) return false;
+  if(NO_ES_REGLA.some(re => re.test(s))) return false;
+  // Hablar DE los ejemplos en vez de dar una instrucción tampoco es una regla.
+  if(/\b(los ejemplos|estos ejemplos|los ["«]?cambios["»]?\s+son|no representan|no reflejan)\b/i.test(s)) return false;
+  if(/\bpatr[oó]n(es)?\b/i.test(s) && /\bno\b/i.test(s.slice(0, 40))) return false;
+  // NINGUNA REGLA BUENA PIDE DEJAR EL TEXTO A MEDIAS. Estas salieron de leer sus
+  // pulsaciones mientras escribía: «completa frases inconclusas (senos l → …)» y
+  // «elimina la segunda oración o dilúyela hasta hacerla ilegible». Son el ruido
+  // de la escritura convertido en norma, y se le pegaban a todos los prompts.
+  if(/\b(ilegible|inconclusa|inconclusas|incompleta|incompletas|truncad|a medias|sin terminar)\b/i.test(s)) return false;
+  return true;
 }
 
 async function adoptarPropuesta(texto){
