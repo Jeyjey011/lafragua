@@ -6571,8 +6571,25 @@ function adelantarProducto(imgs){
   return imgs;
 }
 
+/// Quita de las dependencias lo que no puede ser: una imagen esperándose a sí
+/// misma, o dos esperándose la una a la otra. Se hace al pintar el plan para que
+/// la tarjeta ya no anuncie «Encadena con: ella misma», que es lo que hacía que
+/// la pantalla dijera «genera primero ESC-07-INI» estando tú en ESC-07-INI.
+function limpiarDependencias(imgs){
+  if(!Array.isArray(imgs)) return imgs;
+  const porId = {};
+  imgs.forEach(x => { if(x && x.id) porId[x.id] = x; });
+  imgs.forEach(im => {
+    if(!im || !Array.isArray(im.ref_de) || !im.ref_de.length) return;
+    const limpio = im.ref_de.filter(id => !llevaDeVueltaA(id, im.id, porId, {}));
+    if(limpio.length !== im.ref_de.length) im.ref_de = limpio;
+  });
+  return imgs;
+}
+
 function renderPlanImagenes(data){
   const r = data.resumen||{};
+  limpiarDependencias(data.imagenes||[]);
   adelantarProducto(data.imagenes||[]);
   const imgs = (data.imagenes||[]).slice().sort((a,b)=>(a.orden||0)-(b.orden||0));
   let html = `<div class="card">
@@ -7384,9 +7401,37 @@ function idExisteEnElPlan(id){
   return plan.some(x => x && x.id === id);
 }
 
+/// ¿Siguiendo las dependencias de `desdeId` se acaba llegando a `hastaId`?
+/// Es la pregunta que hay que hacerse antes de esperar a una imagen: si la
+/// respuesta es sí, esperarla es esperar para siempre.
+function llevaDeVueltaA(desdeId, hastaId, porId, vistos){
+  if(!desdeId) return false;
+  if(desdeId === hastaId) return true;
+  if(vistos[desdeId]) return false;
+  vistos[desdeId] = 1;
+  const nodo = porId[desdeId];
+  if(!nodo) return false;
+  return (nodo.ref_de || []).some(p => llevaDeVueltaA(p, hastaId, porId, vistos));
+}
+
 async function generarImagenPlan(im){
   const genId = 'plan-'+im.id;
   const statusEl = document.getElementById('genstatus-'+genId);
+  // UNA IMAGEN NO PUEDE ESPERARSE A SÍ MISMA. El plan lo escribe la IA, y a veces
+  // mete la propia imagen dentro de su "ref_de", o pone dos que se esperan la una
+  // a la otra. Entonces la tarjeta decía «⚠️ genera primero ESC-07-INI» estando tú
+  // EN ESC-07-INI: un callejón sin salida del que no se podía salir salvo editando
+  // el plan a mano, y sin ninguna pista de qué estaba pasando.
+  const porId = {};
+  (((state.animado||{}).step9||{}).imagenes || []).forEach(x => { if(x && x.id) porId[x.id] = x; });
+  const circulares = (im.ref_de||[]).filter(id => llevaDeVueltaA(id, im.id, porId, {}));
+  if(circulares.length){
+    im.ref_de = (im.ref_de||[]).filter(id => circulares.indexOf(id) < 0);
+    saveSession();
+    if(statusEl) statusEl.textContent = ' ℹ️ ' + circulares.join(', ') +
+      (circulares.length===1 ? ' dependía' : ' dependían') +
+      ' de esta misma imagen — se descuelga y se genera igual.';
+  }
   const pendientes = (im.ref_de||[]).filter(id=>!refDelPlan(id));
   // Las que SÍ existen y solo están sin generar: eso sí es esperar.
   const faltan    = pendientes.filter(idExisteEnElPlan);
@@ -15877,6 +15922,9 @@ async function auditarPlanImagenes(){
       if(cambios.length) tocadas++;
       filas.push({id: a.id, persona: !!a.lleva_persona, cambios, notas: (a.arreglos||[]).filter(Boolean)});
     }
+    // La auditoría reescribe "ref_de": si de ahí sale una imagen que se espera a
+    // sí misma, se quita aquí y no llega a bloquear nada.
+    try{ limpiarDependencias(plan); }catch(err){}
     state.animado.auditoriaPlan = {cuando: Date.now(), tocadas};
     saveSession();
 
