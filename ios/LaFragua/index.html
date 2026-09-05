@@ -10231,12 +10231,36 @@ function medirSegundosAudio(url){
 /// Vive dentro de state.animado a propósito: así viaja con el proyecto al
 /// guardarlo y se limpia al empezar uno nuevo, en vez de colarse del proyecto
 /// anterior porque la toma 3 se llama igual en todos.
+/// Lo que tarda en decirse el diálogo de una toma hablada, en segundos que el
+/// modelo acepte. Se mira primero el campo de la pantalla (que es lo editable) y,
+/// si todavía no existe —al pintar las tomas se calcula antes de crear el campo—,
+/// los turnos del storyboard. A 2,5 palabras por segundo, más medio segundo de aire.
+function segundosDelDialogo(n, e){
+  const campo = document.querySelector('#modeAnimado #dialogo-' + n) || document.getElementById('dialogo-' + n);
+  let txt = (campo && typeof campo.value === 'string') ? campo.value : '';
+  if(!txt.trim() && e && Array.isArray(e.dialogo)) txt = e.dialogo.map(d => (d && d.dice) || '').join(' ');
+  if(!txt.trim()) txt = ((document.getElementById('voztxt-' + n) || {}).value || '');
+  txt = String(txt).replace(/\[[^\]]*\]/g, '').trim();
+  const palabras = txt.split(/\s+/).filter(Boolean).length;
+  if(!palabras) return 0;
+  return duracionPermitida(palabras / 2.5 + 0.6);
+}
+
 function segundosDeToma(n, e){
   const a = state.animado || {};
   const aMano = (a.durToma || {})[n];
   if(aMano) return duracionPermitida(aMano);
   const medida = (a.segVoz || {})[n];
   if(medida) return duracionPermitida(medida);
+  // EN UNA TOMA HABLADA NO HAY MP3 QUE MEDIR: la voz la pone el propio video. Así
+  // que a `segVoz` no llegaba nunca nada y se quedaban los segundos que la IA se
+  // inventó en el paso 5 —casi siempre 5— para un diálogo que puede durar doce.
+  // Es exactamente el mismo agujero que ya se cerró para la voz en off, pero por
+  // el otro lado: la frase sale cortada a mitad o el personaje habla a toda prisa.
+  if(tomaHablada(n)){
+    const s = segundosDelDialogo(n, e);
+    if(s) return s;
+  }
   return duracionPermitida((e && e.duracion_seg) || 5);
 }
 
@@ -10662,10 +10686,33 @@ function renderTomasFinales(escenas){
         else if(stVoz && stVoz.textContent.indexOf('sale del video') >= 0) stVoz.textContent = '';
         saveSession();
       };
-      selHabla.onchange = sincDlg;
+      // LOS SEGUNDOS SIGUEN AL DIÁLOGO. En una toma hablada nadie mide un mp3 —la
+      // voz la pone el video—, así que si el desplegable no se mueve al escribir,
+      // se paga un clip de 5 s para una frase de doce y sale cortada.
+      const ajustarPorElDialogo = ()=>{
+        if(selHabla.value !== 'habla') return;
+        const s = segundosDelDialogo(n, e);
+        if(!s) return;
+        const sel = document.getElementById('dur-'+n);
+        // Solo se sube: si él puso 12 a mano, no se le baja por debajo.
+        if(sel && parseInt(sel.value,10) < s){
+          sel.value = String(s);
+          if(!state.animado.durToma) state.animado.durToma = {};
+          state.animado.durToma[n] = s;
+          const cab = document.getElementById('durcab-'+n);
+          if(cab) cab.textContent = String(s);
+          saveSession();
+        }
+      };
+      selHabla.onchange = ()=>{ sincDlg(); ajustarPorElDialogo(); };
+      campoDlg.addEventListener('input', ()=>{
+        clearTimeout(window['__dlgSeg'+n]);
+        window['__dlgSeg'+n] = setTimeout(ajustarPorElDialogo, 600);
+      });
       if(q)  q.oninput  = ()=>{ if(!state.quienHabla) state.quienHabla = {}; state.quienHabla[n] = q.value; saveSession(); };
       if(vg) vg.onchange = ()=>{ if(!state.vozGenero) state.vozGenero = {}; state.vozGenero[n] = vg.value; saveSession(); };
       sincDlg();
+      ajustarPorElDialogo();
     }
     const bVid = document.querySelector(`[data-gen="vid-${n}"]`);
     // Las emociones se suman al campo libre de esta toma, sin borrar lo que haya.
@@ -15518,8 +15565,17 @@ Incluye TODAS las escenas, también las que estaban bien (con "arreglos" vacío)
 
 async function auditarStoryboard(){
   if(!requireApiKey()) return;
-  const sb = state.animado && state.animado.step5;
-  const escenas = sb && Array.isArray(sb.escenas) ? sb.escenas : null;
+  // EL STORYBOARD QUE MANDA, NO EL PRIMERO. Esto leía y arreglaba SIEMPRE
+  // step5.escenas. Pero en cuanto pasas por el paso 7 —«auditar como director»—
+  // el que usan las tomas y el plan de imágenes es step7.storyboard_definitivo,
+  // que es otro arreglo distinto. Así que auditar arreglaba las fases, los
+  // cuerpos, la ropa y los turnos de diálogo de un storyboard que ya no usaba
+  // nadie: dabas al botón, salía «se corrigieron 9 escenas», y en las tomas
+  // seguía todo igual. Ahora se audita el que de verdad se va a rodar.
+  let escenas = null;
+  try{ escenas = mejorStoryboard(); }catch(e){ escenas = null; }
+  const definitivo = !!(state.animado && state.animado.step7 &&
+                        (state.animado.step7.storyboard_definitivo||[]).length);
   if(!escenas || !escenas.length){ toast('Genera primero el storyboard'); return; }
   const caja = document.getElementById('auditStoryResult');
   const nivel = nivelAtrevimiento();
@@ -15559,9 +15615,17 @@ async function auditarStoryboard(){
       if(cambios.length) tocadas++;
       filas.push({n:a.numero, fase:e.fase, cambios, notas});
     }
-    state.animado.auditoriaStoryboard = {cuando: Date.now(), corte: data.corte_en_escena||0, tocadas};
+    state.animado.auditoriaStoryboard = {cuando: Date.now(), corte: data.corte_en_escena||0, tocadas, sobre: definitivo ? 'step7' : 'step5'};
     saveSession();
     try{ if(typeof pintarStoryboard === 'function') pintarStoryboard(state.animado.step5); }catch(err){}
+    // Si lo corregido es el definitivo, las tomas ya armadas siguen enseñando lo
+    // de antes: se repintan para que se vea el arreglo sin tener que adivinarlo.
+    // Se repinta, no se llama a armarTomasFinales: eso te saltaría de pantalla a
+    // mitad de leer la auditoría.
+    if(definitivo && tocadas && state.animado.tomas && state.animado.tomas.length &&
+       document.getElementById('tomasFinalesResult')){
+      try{ state.animado.tomas = escenas; renderTomasFinales(escenas); }catch(err){}
+    }
 
     const esc = (x)=>escapeHtml(String(x==null?'':x));
     const color = {antes:'#d9534f', despues:'#4a9', mixta:'#e8a33d', neutra:'#888'};
@@ -15737,7 +15801,10 @@ async function auditarPlanImagenes(){
       // el final de cada prompt. Caben de sobra: 14 imágenes de 2 KB son 28 KB.
       code_block: String(im.code_block || '')
     }));
-    const escenas = ((state.animado.step5 && state.animado.step5.escenas) || []).map(e => ({
+    // Contra el storyboard QUE MANDA. Si has pasado por el paso 7, las escenas
+    // buenas son las del definitivo: mandarle aquí las del paso 5 hacía que la
+    // auditoría comparara el plan con unas escenas que ya no existen.
+    const escenas = (mejorStoryboard() || []).map(e => ({
       numero: e.numero, frame_type: e.frame_type, action_en: e.action_en,
       descripcion_es: e.descripcion_es, fase: e.fase
     }));
@@ -16111,7 +16178,7 @@ async function animadoPaso6(){
   if(!requireApiKey()) return;
   setLoadingAnimado(true, 'Armando los prompts por escena...', 'Es un paso OPCIONAL: sirve para copiar los prompts fuera de la app. Lo que se genera aqui dentro sale del paso 8.');
   try{
-    const userContent = `Usa la FORMA "nanobanana". STYLE LOCK para este estilo: "${styleLockActual()}".\nESCENAS: ${JSON.stringify(state.animado.step5?state.animado.step5.escenas:[])}`;
+    const userContent = `Usa la FORMA "nanobanana". STYLE LOCK para este estilo: "${styleLockActual()}".\nESCENAS: ${JSON.stringify(mejorStoryboard())}`;
     const raw = await callClaude(SYSTEM_PROMPT_ANIMADO, userContent, 64000);
     const parsed = parseJsonLoose(raw);
     state.animado.step6 = parsed;
