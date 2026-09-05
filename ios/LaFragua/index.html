@@ -1670,6 +1670,15 @@ footer.app-footer{text-align:center; padding:30px 0 50px; color:var(--steel); fo
           <small class="help">Se elige <b>una vez, aquí</b>, y manda en todo lo que venga después: storyboard, plan de imágenes y tomas de video. No hay que ir escena por escena. En el <b>antes</b> no se aplica nunca — el antes vive de que se vea mal, y ponerle ropa provocativa mata el contraste que vende. En todos los niveles la ropa cubre pezones y entrepierna y no hay actos sexuales: no por remilgo, sino porque el modelo devuelve la imagen rechazada y se paga igual, y la cuenta publicitaria se cae.</small>
         </div>
         <div class="field">
+          <label>💪 Intensidad del antes/después</label>
+          <select id="aIntensidad">
+            <option value="marcada" selected>Marcada — se lee de un vistazo (recomendado)</option>
+            <option value="sutil">Sutil — máxima credibilidad</option>
+            <option value="máxima">Máxima — transformación dramática</option>
+          </select>
+          <small class="help">Cuánto cambia el cuerpo entre el antes y el después al escribir las escenas. <b>Esto vive aquí desde ahora:</b> antes lo mandaba el desplegable de 🎨 Creatividades, que es otro modo — hacer creatividades te cambiaba en silencio cómo salía el storyboard.</small>
+        </div>
+        <div class="field">
           <label>🚫 Censura</label>
           <label style="display:flex; gap:8px; align-items:flex-start; font-weight:400;">
             <input type="checkbox" id="aSinCensura" style="margin-top:3px;">
@@ -3968,13 +3977,15 @@ function alternarSonido(){
 /* ============================================================
    HELPERS
 ============================================================ */
-function toast(msg){
+function toast(msg, ms){
   try{ sonarPop(); }catch(e){}
   const t = document.getElementById('toast');
+  if(!t) return;                       // sin el hueco en la página, avisar no puede reventar nada
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(t._timer);
-  t._timer = setTimeout(()=>t.classList.remove('show'), 2200);
+  // Un aviso de «has perdido algo» no puede durar lo mismo que un «copiado ✓».
+  t._timer = setTimeout(()=>t.classList.remove('show'), ms || 2200);
 }
 function copyText(txt, label){
   navigator.clipboard.writeText(txt).then(()=>toast(label ? label+' copiado' : 'Copiado ✓'));
@@ -4873,11 +4884,14 @@ const _verTodasLasRefs = {};
 function assetsDelModo(genId, keys){
   const id = String(genId||'');
   if(_verTodasLasRefs[id]) return keys;
-  if(/^plan-/.test(id)){
+  // «vid-» es el video del storyboard ANIMADO (paso 10), no del UGC: estaba en el
+  // grupo equivocado y por eso se le escondía «producto_estilo», que es justo la
+  // referencia que hace que el envase salga con el mismo acabado que la escena.
+  if(/^(plan-|vid-)/.test(id)){
     // Animado: fuera lo del UGC y fuera el banco de fotos reales del producto.
     return keys.filter(k => ASSETS_SOLO_UGC.indexOf(k) < 0 && !/^(antes|despues)_\d+$/.test(k));
   }
-  if(/^(setup-|take-|vid-)/.test(id)){
+  if(/^(setup-|take-|broll-)/.test(id)){
     return keys.filter(k => ASSETS_SOLO_ANIMADO.indexOf(k) < 0);
   }
   return keys;
@@ -5020,34 +5034,73 @@ function sinDataUrls(x){
   return x;
 }
 let _avisoCupoDado = false;
-/// CUÁNTO SITIO QUEDA, ANTES DE QUE SE ACABE. El aviso de «no hay cupo» solo
-/// saltaba cuando YA había reventado, y para entonces la sesión no se guarda.
-/// Esto avisa una vez cuando se pasa del 70%, y dice qué es lo que ocupa.
+let _avisoRecorteDado = false;
+/* CUÁNTO SITIO QUEDA, ANTES DE QUE SE ACABE.
+   Esto comparaba lo ocupado contra un tope INVENTADO de 5 MB, y además contaba
+   CARACTERES cuando el navegador cobra por BYTES: cada carácter son dos. Dos
+   errores que tiran en direcciones contrarias, así que el aviso nunca caía donde
+   debía. Medido en el WebView de escritorio, el techo real está muy por encima de
+   esos 5 MB —pasa de 50 millones de caracteres—, así que el modal saltaba con el
+   almacén casi vacío; y en un navegador con el tope clásico de 5 MB habría llegado
+   tarde, porque 3,5 millones de caracteres ya son 7 MB de verdad.
+   Ahora no se adivina el techo: se intenta escribir un bulto de prueba del tamaño
+   que hace falta. Si entra, hay sitio. Es la única pregunta que importa. */
 let _avisoEspacioDado = false;
-function vigilarEspacio(){
-  if(_avisoEspacioDado) return;
+let _ultimaSonda = 0;
+
+/// Lo que de verdad ocupa el almacén, en bytes: clave + valor, a dos bytes por carácter.
+function bytesDelAlmacen(){
   let total = 0;
   const trozos = [];
+  for(let i = 0; i < localStorage.length; i++){
+    const k = localStorage.key(i) || '';
+    const n = (k.length + (localStorage.getItem(k) || '').length) * 2;
+    total += n;
+    if(n > 100000) trozos.push([k, n]);
+  }
+  return {total: total, trozos: trozos};
+}
+
+/// ¿Cabe todavía un bulto de este tamaño? Se comprueba escribiéndolo.
+function cabeUnBultoDe(bytes){
+  const caracteres = Math.max(1, Math.ceil(bytes / 2));
   try{
-    for(let i = 0; i < localStorage.length; i++){
-      const k = localStorage.key(i);
-      const n = (localStorage.getItem(k) || '').length;
-      total += n;
-      if(n > 50000) trozos.push([k, n]);
-    }
-  }catch(e){ return; }
-  const TOPE = 5 * 1024 * 1024;          // lo normal en un navegador
-  if(total < TOPE * 0.70) return;
+    localStorage.setItem('__fragua_sonda', 'x'.repeat(caracteres));
+    localStorage.removeItem('__fragua_sonda');
+    return true;
+  }catch(e){
+    try{ localStorage.removeItem('__fragua_sonda'); }catch(x){}
+    return false;
+  }
+}
+
+function vigilarEspacio(){
+  if(_avisoEspacioDado) return;
+  // La sonda escribe de verdad; una vez cada cinco minutos basta y no estorba.
+  const ahora = Date.now();
+  if(ahora - _ultimaSonda < 300000) return;
+  _ultimaSonda = ahora;
+
+  let info;
+  try{ info = bytesDelAlmacen(); }catch(e){ return; }
+  // Margen: que quepa otra vez lo que ya ocupa la sesión, con un mínimo de 1 MB.
+  let necesario = 1024 * 1024;
+  try{ necesario = Math.max(necesario, ((localStorage.getItem('fragua_session') || '').length * 2) * 1.3); }catch(e){}
+  if(cabeUnBultoDe(necesario)) return;
+
   _avisoEspacioDado = true;
+  const trozos = info.trozos;
   trozos.sort((a, b) => b[1] - a[1]);
   const nombres = {fragua_proyectos:'tus proyectos guardados', fragua_gastos:'el historial de gasto',
                    fragua_correcciones:'las correcciones aprendidas', fragua_session:'la sesión abierta',
                    fragua_sesion_previa:'la copia de antes de abrir un proyecto'};
-  const lista = trozos.slice(0, 3).map(([k, n]) => (nombres[k] || k) + ' (' + Math.round(n/1024) + ' KB)').join(', ');
+  const lista = trozos.slice(0, 3).map(([k, n]) => (nombres[k] || k) + ' (' + Math.round(n/1024) + ' KB)').join(', ')
+                || 'nada suelto que destaque';
   try{
     mostrarAvisoModal('📦 El almacén se está llenando',
-      '<div class="es-explain" style="text-align:left;">Llevas <b>' + (total/1024/1024).toFixed(2) + ' MB</b> de los ~5 MB que ' +
-      'te deja el navegador. Cuando se llena, la app deja de poder guardar la sesión y el aviso llega tarde.<br><br>' +
+      '<div class="es-explain" style="text-align:left;">El navegador ya no deja escribir otro bloque del tamaño de tu sesión. ' +
+      'Ocupado ahora mismo: <b>' + (info.total/1024/1024).toFixed(2) + ' MB</b>. Cuando se llena del todo, la app deja de ' +
+      'poder guardar la sesión.<br><br>' +
       '<b>Lo que más ocupa:</b> ' + escapeHtml(lista) + '.<br><br>' +
       'Lo más efectivo es borrar proyectos viejos que ya publicaste, en 📁 Proyecto → Borrar. Tus imágenes y videos ' +
       'no se van: viven en la carpeta del proyecto, no aquí.</div>',
@@ -5061,10 +5114,16 @@ function saveSession(){
   try{
     localStorage.setItem('fragua_session', JSON.stringify(paquete));
   }catch(e){
-    // Sigue sin caber: se suelta lo más pesado y prescindible antes de rendirse.
+    // Sigue sin caber: se suelta lo más pesado antes de rendirse. PERO SE DICE.
+    // Antes esto pasaba en silencio: la sesión quedaba guardada SIN el guion ni
+    // las creatividades, y al recargar habían desaparecido sin ninguna explicación.
     try{
       delete paquete.result; delete paquete.ads; delete paquete.c6;
       localStorage.setItem('fragua_session', JSON.stringify(paquete));
+      if(!_avisoRecorteDado){
+        _avisoRecorteDado = true;
+        try{ toast('⚠️ La sesión no cabía: se guardó SIN el guion ni las creatividades. Si recargas ahora los pierdes — guarda el proyecto en 📁 Proyecto.', 9000); }catch(x){}
+      }
     }catch(e2){
       if(!_avisoCupoDado){
         _avisoCupoDado = true;
@@ -5580,7 +5639,7 @@ function genButtonHtml(genId, conExtra, autoKeys, kind, extras){
   const intenso = (state.promptsIntensos||{})[genId] ? ' intenso' : '';
   let precio = '';
   try{ precio = `<span class="pastilla-precio" title="Lo que cuesta esta generación con los precios que pusiste">${etiquetaCoste(genId, kind || 'imagen')}</span>`; }catch(e){}
-  return `${chips}<button class="btn small calm" data-gen="${genId}">🌊 Generar</button>${precio}` +
+  return `${chips}<button class="btn small calm" data-gen="${genId}" data-kind="${kind || 'imagen'}">🌊 Generar</button>${precio}` +
     `<button class="btn small${intenso}" data-intenso="${genId}" title="Reescribe el prompt para que el cuerpo y el cambio se lean de un vistazo, y lo manda a los modelos que no rechazan">🔥 Subir intensidad</button>` +
     `<span class="toolkit-note" id="genstatus-${genId}"></span><div id="genresult-${genId}"></div>`;
 }
@@ -5823,19 +5882,73 @@ async function verDesgloseGasto(){
     [{id:'ok', texto:'Cerrar', principal:true}]);
 }
 
+/* ------------------------------------------------------------------
+   LOS SEGUNDOS QUE DE VERDAD SE VAN A PEDIR
+   Tres sitios distintos calculaban el precio de un video, y los tres miraban
+   solo el desplegable «dur-N» del modo animado. Cualquier OTRO video —las tomas
+   habladas del UGC, los b-roll, los de la caja de herramientas, la réplica— no
+   casaba con ese patrón, así que caía al valor de reserva y quedaba cotizado Y
+   APUNTADO como 5 s siempre. Los b-roll salen de la duración global que hay en
+   ⚙️ Configuración, que puede estar en 10, 15 o 30: el gasto quedaba apuntado a
+   la mitad, a un tercio o a la sexta parte de lo que costó de verdad.
+------------------------------------------------------------------ */
+function segundosDeGeneracion(genId){
+  const id = String(genId == null ? '' : genId);
+  const n = (id.match(/^vid-(\d+)$/) || [])[1];
+  if(n){
+    const sel = document.getElementById('dur-' + n);
+    const v = sel ? parseInt(sel.value, 10) : 0;
+    return v || segundosProbablesDeVideo(n);
+  }
+  // La réplica tiene su propio campo de duración.
+  if(id === 'replica'){
+    const r = document.getElementById('repDuracion');
+    const v = r ? parseInt(r.value, 10) : 0;
+    if(v) return Math.max(4, Math.min(15, v));
+  }
+  // Toma hablada: el clip dura lo que dure la locución, y la locución sale del texto.
+  const t = (id.match(/^take-(\d+)$/) || [])[1];
+  if(t){
+    const el = document.getElementById('ugc-dialogo-' + t);
+    const crudo = el ? (el.value != null ? el.value : el.textContent) : '';
+    const txt = String(crudo || '').replace(/\[[^\]]*\]/g, '').trim();
+    const palabras = txt.split(/\s+/).filter(Boolean).length;
+    if(palabras) return duracionPermitida(palabras / 2.5 + 0.6);
+  }
+  // Todo lo demás pasa por wsGenerateVideo, que manda la duración de Configuración.
+  const g = parseInt(((state.wsModels || {}).vidDuracion), 10);
+  return (isFinite(g) && g > 0) ? g : 5;
+}
+
+function caracteresDeGeneracion(genId){
+  const id = String(genId == null ? '' : genId);
+  const n = (id.match(/^voz-(\d+)$/) || [])[1];
+  const ta = n && document.getElementById('voztxt-' + n);
+  if(ta) return (ta.value || '').length || 300;
+  return 300;
+}
+
+function opcionesDeCoste(genId, kind){
+  if(kind === 'video') return {segundos: segundosDeGeneracion(genId)};
+  if(kind === 'audio') return {caracteres: caracteresDeGeneracion(genId)};
+  return {};
+}
+
+/// De qué clase es una generación. El botón lo lleva escrito desde que se pinta;
+/// adivinarlo por el prefijo del id daba «imagen» para take-, broll- y setup-.
+function kindDeGeneracion(genId, porDefecto){
+  const b = document.querySelector('[data-gen="' + String(genId).replace(/"/g, '\\"') + '"]');
+  const k = b && b.dataset ? b.dataset.kind : '';
+  if(k === 'video' || k === 'audio' || k === 'imagen') return k;
+  const id = String(genId == null ? '' : genId);
+  if(id.indexOf('vid-') === 0 || id.indexOf('take-') === 0 || id.indexOf('broll-') === 0) return 'video';
+  if(id.indexOf('voz-') === 0) return 'audio';
+  return porDefecto || 'imagen';
+}
+
 /// La etiqueta de precio que va pegada a cada botón de generar.
 function etiquetaCoste(genId, kind){
-  let opts = {};
-  if(kind === 'video'){
-    const n = (genId.match(/^vid-(\d+)$/) || [])[1];
-    const sel = n && document.getElementById('dur-' + n);
-    opts.segundos = sel ? parseInt(sel.value, 10) : 5;
-  } else if(kind === 'audio'){
-    const n = (genId.match(/^voz-(\d+)$/) || [])[1];
-    const ta = n && document.getElementById('voztxt-' + n);
-    opts.caracteres = ta ? (ta.value || '').length : 300;
-  }
-  return comoDinero(costeDe(kind, opts));
+  return comoDinero(costeDe(kind, opcionesDeCoste(genId, kind)));
 }
 
 /* ============================================================
@@ -5882,11 +5995,11 @@ function segundosProbablesDeVideo(n){
 }
 function costeDeLaCola(ids){
   return ids.reduce((t,id)=>{
-    const kind = id.indexOf('vid-')===0 ? 'video' : id.indexOf('voz-')===0 ? 'audio' : 'imagen';
-    let opts = {};
-    if(kind==='video'){ const n=(id.match(/^vid-(\d+)$/)||[])[1]; opts.segundos = n ? segundosProbablesDeVideo(n) : 5; }
-    if(kind==='audio'){ const n=(id.match(/^voz-(\d+)$/)||[])[1]; const t=n&&document.getElementById('voztxt-'+n); opts.caracteres = t?(t.value||'').length:300; }
-    return t + costeDe(kind, opts);
+    // La clase sale del propio botón: por el prefijo del id, take-, broll- y
+    // setup- se cotizaban como IMAGEN aunque generen video, y el presupuesto que
+    // aprobabas antes de lanzar la cola salía muy por debajo de lo que se pagó.
+    const kind = kindDeGeneracion(id);
+    return t + costeDe(kind, opcionesDeCoste(id, kind));
   }, 0);
 }
 
@@ -6068,11 +6181,7 @@ async function runGen(genId, kind, fn, altFn, etiqueta){
     if(statusEl) statusEl.textContent = '';
     if(resultEl) renderGenResult(resultEl, url, kind, etiqueta || genId);
     recordarGenerado(genId, url, kind, etiqueta);   // sobrevive a cerrar la app
-    try{ apuntarGasto(genId, kind, etiqueta, kind==='video'
-          ? {segundos: parseInt((document.getElementById('dur-'+(genId.match(/^vid-(\d+)$/)||[])[1])||{}).value||5,10)}
-          : kind==='audio'
-          ? {caracteres: ((document.getElementById('voztxt-'+(genId.match(/^voz-(\d+)$/)||[])[1])||{}).value||'').length || 300}
-          : {}); }catch(e){}
+    try{ apuntarGasto(genId, kind, etiqueta, opcionesDeCoste(genId, kind)); }catch(e){}
     clearPendingTask(genId);
     refreshAllRefChips();
     try{ sonarYunque(); }catch(e){}                 // queda forjado (esto no pasa por la capa de carga)
@@ -7116,7 +7225,14 @@ async function asegurarProducto(url, setStatus){
     // el prompt y no debería volver a pagar esta corrección.
     apuntarReglaProducto(v.que_falla);
     if(setStatus) setStatus(' el producto salió mal — corrigiéndolo automáticamente con OpenAI...');
+    // DOS IMÁGENES PAGADAS, UN SOLO APUNTE. La corrección automática pisaba el
+    // coste real de la generación de origen, así que runGen acababa apuntando el
+    // precio de la CORRECCIÓN como si fuera el de toda la generación: se perdía
+    // una imagen entera del contador cada vez que el envase salía mal.
+    const costeDeLaDeOrigen = _costeRealUltimo;
     const corregida = await corregirProductoAuto(url, v.que_falla, setStatus);
+    try{ apuntarGasto('auto-producto', 'imagen', 'Corrección automática del envase'); }catch(e){}
+    _costeRealUltimo = costeDeLaDeOrigen;   // la de origen sigue valiendo lo suyo
     if(setStatus) setStatus(' 🔍 verificando la corrección...');
     const v2 = await verificarProducto(corregida);
     if(v2.coincide){ toast('El producto había salido mal y se corrigió solo ✓'); return corregida; }
@@ -7592,10 +7708,16 @@ async function adsPaso2(){
     const fichaP = productoActivo();
     const extraP = fichaP ? `\nFICHA GUARDADA DEL PRODUCTO (fuente de verdad para precios, ángulo, cliente y aspecto físico):\n${JSON.stringify(fichaP)}\n${fichaP.descripcion_fisica?`ASPECTO FÍSICO — respétalo al pie de la letra en todos los prompts: ${fichaP.descripcion_fisica}\n`:''}` : '';
     const intensidad = document.getElementById('adIntensidad').value;
-  state.intensidadElegida = intensidad;
+    // ESTO YA NO PISA EL MODO ANIMADO. Antes se guardaba en state.intensidadElegida,
+    // que era justo lo que leía el storyboard del modo animado: pedir creatividades
+    // le cambiaba en silencio la intensidad con la que iban a nacer sus escenas.
+    // El animado tiene ahora su propio desplegable (ver nivelIntensidad).
     const userContent = `Usa la FORMA "prompts". Entrega EXACTAMENTE ${cuantos} creativos, y de cada uno sus DOS versiones (1:1 y 9:16).\nNIVEL DE TRANSFORMACIÓN: ${intensidad} — aplícalo en la CRITICAL REALISM RULE de cada prompt que lleve antes/después, y maximiza el contraste entre las dos fotos para que el cambio se lea en miniatura.\nPALETA CONFIRMADA (HEX): ${hex}\nMODO: ${modo}${extraP}\nEL USUARIO ${tieneFoto==='si'?'SÍ tiene':'NO tiene'} imagen del ancla para adjuntar como referencia.${tieneFoto==='no'?' Prioriza los formatos que no necesitan producto y, donde haga falta soporte, describe el soporte genérico sin inventar contenido de marca.':''}\nANÁLISIS PREVIO: ${JSON.stringify(state.ads.analisis)}`;
     const raw = await callClaude(SYSTEM_PROMPT_ADS + REGLA_DOBLE_FORMATO, userContent, 64000);
     const parsed = parseJsonLoose(raw);
+    // Tanda nueva: las correcciones a mano de la tanda anterior se sueltan, o se
+    // pintarían encima de estos prompts recién pagados (ver soltarEdiciones).
+    soltarEdiciones(/^pre-ad-\d/);
     state.ads.prompts = parsed;
     renderAdsPrompts(parsed);
     renderStepsNavAds(2);
@@ -8212,6 +8334,8 @@ async function generarVariaciones(){
     const userContent = `${encabezado}\nNIVEL DE TRANSFORMACIÓN: ${intensidad} — aplícalo donde haya antes/después y maximiza el contraste entre las dos fotos para que el cambio se lea en miniatura.\n${enfoqueTxt}\n\nFICHA DEL PRODUCTO:\n${JSON.stringify(ficha)}\n\nEl usuario ${ficha.foto_producto?'SÍ':'NO'} tiene foto del producto para adjuntar, y ${ficha.foto_modelo?'SÍ':'NO'} tiene foto de la modelo.`;
     const raw = await callClaude(SYSTEM_PROMPT_VARIACIONES + REGLA_DOBLE_FORMATO, userContent, 64000, creativo ? [creativo] : null);
     const parsed = parseJsonLoose(raw);
+    // Igual que en Creatividades: tanda nueva, ediciones viejas fuera.
+    soltarEdiciones(/^pre-var-\d/);
     state.variaciones = {base: creativo, ficha: ficha, resultado: parsed, desdeCero: desdeCero};
     renderVariaciones(parsed);
     saveSession();
@@ -9069,9 +9193,15 @@ function esEstiloFotografico(){
 
 /// ¿Esta generación es del modo animado? Ahí manda el estilo; en creatividades
 /// para Meta o en el UGC real, no — esas piezas son fotográficas a propósito.
+/// ¿ESTA GENERACIÓN ES DEL MODO ANIMADO? De aquí sale el candado de estilo, y el
+/// candado de estilo dice literalmente «Stylized 3D CHARACTER, never a photograph,
+/// never a real person». «take-» son las tomas HABLADAS del UGC: personas reales,
+/// grabadas como si fuera un celular. Estaban en esta lista, así que cada toma de
+/// UGC salía pedida como dibujo animado — y pagada. Aquí solo va lo del storyboard
+/// animado: el plan de imágenes («plan-») y sus videos («vid-»).
 function esDelModoAnimado(genId){
   const id = genId || _currentGenId || '';
-  return /^(plan-|vid-|take-)/.test(id);
+  return /^(plan-|vid-)/.test(id);
 }
 
 /* ------------------------------------------------------------------
@@ -9494,6 +9624,18 @@ const LIMITE_ATREVIMIENTO =
 function nivelAtrevimiento(){
   const s = (state.animado && state.animado.atrevimiento) || localStorage.getItem('fragua_atrevimiento') || 'sexy';
   return NIVELES_ATREVIMIENTO.indexOf(s) >= 0 ? s : 'sexy';
+}
+/// CUÁNTO CAMBIA EL CUERPO, para el storyboard animado. Esto lo mandaba el
+/// desplegable de 🎨 Creatividades, que es OTRO MODO: cada vez que se generaban
+/// creatividades se escribía encima el nivel con el que iba a nacer el storyboard,
+/// y el modo animado no tenía ningún sitio donde elegirlo. Ahora tiene el suyo, y
+/// lo de Creatividades solo sirve de valor heredado para proyectos viejos.
+const NIVELES_INTENSIDAD = ['sutil','marcada','máxima'];
+function nivelIntensidad(){
+  const s = (state.animado && state.animado.intensidad) ||
+            localStorage.getItem('fragua_intensidad') ||
+            state.intensidadElegida || 'marcada';
+  return NIVELES_INTENSIDAD.indexOf(s) >= 0 ? s : 'marcada';
 }
 /// «Sin censura» es una casilla aparte porque significa otra cosa: no es cuánta
 /// ropa lleva, es a qué modelos va. Marcada, la imagen se manda SIEMPRE por la
@@ -11579,6 +11721,9 @@ async function corregirImagen(genId, forzarOA){
   if(btn) btn.disabled = true;
   if(btnOA) btnOA.disabled = true;
   if(nota) nota.textContent = forzarOA ? ' corrigiendo con OpenAI...' : ' corrigiendo...';
+  // Corregir es una generación pagada como cualquier otra: empieza el coste a cero
+  // (para no heredar el de otra que falló) y se apunta al terminar.
+  _costeRealUltimo = null;
   try{
     // Corregir una imagen del modo animado no puede devolverla al mundo real.
     // Con el botón de OpenAI se va SOLO a OpenAI — si falla, se dice, no se
@@ -11591,6 +11736,9 @@ async function corregirImagen(genId, forzarOA){
     const etiqueta = (guardado.etiqueta||genId) + ' (corregida)';
     if(cont) renderGenResult(cont, url, 'imagen', etiqueta);
     recordarGenerado(genId, url, 'imagen', etiqueta);
+    // ESTO SE PAGA. No se apuntaba en ningún sitio: podías corregir veinte
+    // imágenes y el contador seguía marcando lo mismo que antes de empezar.
+    try{ apuntarGasto(genId + '-corr', 'imagen', etiqueta); }catch(e){}
     if(nota) nota.textContent = ' corregida ✓';
     campo.value = '';
     refreshAllRefChips();
@@ -13055,9 +13203,20 @@ async function explicarDesfase(){
 /// Lo escrito en "añade algo a esta toma" (vidextra-) se conserva: son deseos
 /// del usuario sobre la cámara o el gesto, no descripciones de la escena.
 function soltarPromptsDeTomas(){
-  const esDeToma = k => /^(vidtxt|voztxt)-/.test(k);
-  Object.keys(state.edicionesPrompt || {}).forEach(k=>{ if(esDeToma(k)) delete state.edicionesPrompt[k]; });
-  Object.keys(state.originalesPrompt || {}).forEach(k=>{ if(esDeToma(k)) delete state.originalesPrompt[k]; });
+  soltarEdiciones(/^(vidtxt|voztxt)-/);
+}
+
+/// Suelta las ediciones a mano de una familia de bloques.
+/// HACE FALTA CADA VEZ QUE EL CONTENIDO SE REGENERA. Los ids se repiten tanda tras
+/// tanda —«pre-ad-0-1x1» es el primer creativo de la tanda de hoy y también el de
+/// la de ayer—, así que al pintar la tanda nueva engancharEdiciones restauraba
+/// encima el texto que habías editado en la ANTERIOR. Pedías creatividades nuevas,
+/// pagabas una llamada de 64.000 tokens, y en la caja seguía el prompt viejo — que
+/// además era el que se enviaba a generar la imagen.
+function soltarEdiciones(patron){
+  const re = (patron instanceof RegExp) ? patron : new RegExp(patron);
+  Object.keys(state.edicionesPrompt || {}).forEach(k=>{ if(re.test(k)) delete state.edicionesPrompt[k]; });
+  Object.keys(state.originalesPrompt || {}).forEach(k=>{ if(re.test(k)) delete state.originalesPrompt[k]; });
 }
 
 async function sincronizarGuion(){
@@ -14195,7 +14354,7 @@ function renderBroll(clips){
       <pre class="prompt-block">${escapeHtml(c.video_prompt_en||'')}</pre>
       <button class="btn small" data-copy-broll-vid="${i}">📋 Copiar video</button>
       ${c.narracion_sugerida_es? `<div class="es-explain" style="margin-top:8px;"><b>Narración sugerida (opcional):</b> "${escapeHtml(c.narracion_sugerida_es)}"</div>`:''}
-      <div style="margin-top:8px;">${genButtonHtml('broll-'+i, true, ['producto_en_mano','modelo'], 'imagen')}</div>
+      <div style="margin-top:8px;">${genButtonHtml('broll-'+i, true, ['producto_en_mano','modelo'], 'video')}</div>
       <div class="toolkit-note">El botón genera primero la imagen, y automáticamente la anima con el prompt de video — sin pasos intermedios.</div>
     </div>
   `).join('');
@@ -14213,6 +14372,11 @@ function renderBroll(clips){
           if(statusEl) statusEl.textContent = ' generando la imagen base...';
           const refs = leerRefsSeleccionadas(genId, 'imagen');
           const imgUrl = await wsGenerateImageSmart(c.imagen_prompt_en, refs, null, s=>{if(statusEl) statusEl.textContent=s;});
+          // UN CLIC DE B-ROLL SON DOS GENERACIONES PAGADAS: la foto base y el video.
+          // Solo se apuntaba la segunda, así que la imagen salía gratis en el
+          // contador. Se apunta aquí, mientras el coste real que devolvió el
+          // proveedor todavía es el de la imagen (el del video llega después).
+          try{ apuntarGasto(genId + '-img', 'imagen', 'B-roll ' + (c.numero || (i+1)) + ' — foto base'); }catch(e){}
           if(statusEl) statusEl.textContent = ' imagen lista — animando el clip...';
           const vidUrl = await wsGenerateVideo(c.video_prompt_en, imgUrl);
           return vidUrl;
@@ -15827,7 +15991,7 @@ async function animadoPaso5(){
   if(!requireApiKey()) return;
   setLoadingAnimado(true, 'Armando el storyboard...', 'Dividiendo el guion en escenas.');
   try{
-    const intensidadAct = state.intensidadElegida || 'marcada';
+    const intensidadAct = nivelIntensidad();
     const pedidas = arcoElegido()
       .map(c => { const e = EMOCIONES.find(x=>x.clave===c); return e ? (e.clave + ' (' + e.en + ')') : ''; })
       .filter(Boolean);
@@ -16131,6 +16295,17 @@ window.addEventListener('DOMContentLoaded', ()=>{
         }
         saveSession();
         toast('Nivel: ' + sel.value + ' — manda en storyboard, imágenes y video');
+      };
+    } }
+  { const sel = document.getElementById('aIntensidad');
+    if(sel){
+      sel.value = nivelIntensidad();
+      sel.onchange = ()=>{
+        if(!state.animado) state.animado = {};
+        state.animado.intensidad = sel.value;
+        localStorage.setItem('fragua_intensidad', sel.value);
+        saveSession();
+        toast('Intensidad del antes/después: ' + sel.value);
       };
     } }
   // Quién pone la voz: se elige aquí, ANTES del storyboard, y viaja al paso 5 y
