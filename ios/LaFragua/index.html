@@ -10432,8 +10432,25 @@ function armarPromptToma(n, e, avisar){
   return { texto, refs, segs, autoCara, quienes: quienesV, modo };
 }
 
+/// Las escenas EN ORDEN. El montaje pega las tomas en el orden de este arreglo,
+/// no por su número: si el modelo devuelve las escenas desordenadas —o si una
+/// tanda de «continuar storyboard» llega con números que se solapan— el video
+/// final sale con las escenas cambiadas de sitio y no hay nada en pantalla que lo
+/// explique. Solo se reordena cuando TODAS traen número: si falta alguno, tocar
+/// el orden sería peor que dejarlo como vino.
+function enOrdenDeEscena(escenas){
+  const lista = (escenas || []).filter(Boolean);
+  if(lista.length < 2) return lista;
+  const nums = lista.map(e => Number(e && e.numero));
+  if(nums.some(n => !isFinite(n))) return lista;
+  return lista
+    .map((e, i) => ({e, i, n: nums[i]}))
+    .sort((a, b) => (a.n - b.n) || (a.i - b.i))    // empate: como venían
+    .map(x => x.e);
+}
+
 function armarTomasFinales(){
-  const escenas = mejorStoryboard();
+  const escenas = enOrdenDeEscena(mejorStoryboard());
   if(!escenas.length){ toast('Genera antes el storyboard (paso 5)'); return; }
   state.animado.tomas = escenas;
   // Con red: era la única pantalla que se dibujaba sin protección, así que un
@@ -12908,8 +12925,15 @@ function modoVozGlobal(){
 /// cuando la global es "depende de la escena".
 function escenaConDialogo(e){
   if(!e) return false;
-  return ((e.dialogo || []).some(d => ((d && d.dice) || '').trim()))
-      || ((e.personajes || []).length > 1 && !!String(e.voz_en_off||'').match(/[«"—]/));
+  // LO QUE DEVUELVE LA IA NO SIEMPRE TIENE LA FORMA PEDIDA. Se le piden turnos en
+  // un arreglo y a veces manda una frase suelta, o personajes como texto. Aquí eso
+  // reventaba, y como de esto cuelga «¿esta toma es hablada?», el error subía hasta
+  // dejar la pantalla de tomas en blanco sin decir por qué.
+  const turnos = Array.isArray(e.dialogo) ? e.dialogo
+               : (typeof e.dialogo === 'string' && e.dialogo.trim() ? [{dice: e.dialogo}] : []);
+  if(turnos.some(d => String((d && d.dice) || '').trim())) return true;
+  const gente = Array.isArray(e.personajes) ? e.personajes : (e.personajes ? [e.personajes] : []);
+  return gente.length > 1 && !!String(e.voz_en_off == null ? '' : e.voz_en_off).match(/[«"—]/);
 }
 /// El modo de UNA toma. Orden: lo que elegiste a mano en esa toma → lo que dice
 /// la global → derivado del diálogo. Se puede llamar desde fuera del paso 10,
@@ -13049,7 +13073,12 @@ function turnosDeLaToma(n){
     return { etiqueta: p.quien_es || id, paraElModelo: (donde ? ('the character ' + donde) : (p.quien_es || id)) + rasgo,
              voz: /hombre|male/i.test(p.voz||'') ? 'male' : 'female' };
   };
-  return (esc.dialogo || []).map(d => Object.assign({dice: d.dice || '', tono: d.tono || ''}, nombreDe(d.personaje)));
+  // Mismo cuidado que en escenaConDialogo: la IA puede mandar una frase suelta
+  // donde se le pidió un arreglo de turnos, y esto reventaba al pintar.
+  const turnos = Array.isArray(esc.dialogo) ? esc.dialogo
+               : (typeof esc.dialogo === 'string' && esc.dialogo.trim() ? [{dice: esc.dialogo}] : []);
+  return turnos.filter(Boolean)
+    .map(d => Object.assign({dice: d.dice || '', tono: d.tono || ''}, nombreDe(d.personaje)));
 }
 
 /// El bloque que se le manda al modelo: los turnos, en orden, con quién los dice
@@ -13829,7 +13858,9 @@ async function rescatarHuerfano(n){
 }
 
 function tomasParaMontar(){
-  const escenas = (state.animado && state.animado.tomas) ? state.animado.tomas : [];
+  // Y otra vez aquí, por si las tomas vienen de un proyecto guardado antes de que
+  // se ordenaran al armarlas: el montaje pega en el orden de esta lista.
+  const escenas = enOrdenDeEscena((state.animado && state.animado.tomas) ? state.animado.tomas : []);
   const gen = state.generados || {};
   return escenas.map((e,i)=>{
     const n = e.numero || i+1;
@@ -16084,9 +16115,11 @@ function pintarArcoEmocional(){
 /// La emoción que la IA le puso a una escena, resuelta contra la tabla de EMOCIONES.
 function emocionDeEscena(e){
   if(!e) return null;
-  const clave = (e.emocion_clave || '').trim().toLowerCase();
+  // Igual que en escenaConDialogo: si la IA manda un número o un arreglo donde
+  // toca texto, esto reventaba en mitad de pintar el storyboard.
+  const clave = String(e.emocion_clave == null ? '' : e.emocion_clave).trim().toLowerCase();
   const dela = EMOCIONES.find(x => x.clave === clave);
-  const en = (e.emocion_en || (dela ? dela.en : '')).trim();
+  const en = String(e.emocion_en == null ? (dela ? dela.en : '') : e.emocion_en).trim();
   if(!en) return null;
   return {en: en, tag: dela ? dela.tag : '', etiqueta: dela ? dela.etiqueta : ''};
 }
