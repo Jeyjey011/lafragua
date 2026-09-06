@@ -9275,7 +9275,15 @@ async function generarVideoEnCadena(prompt, refUrls, aspecto, setStatus, duracio
   // Las referencias del VIDEO van por enlace, NO incrustadas: la API de video
   // rechaza las imágenes en base64 (la de imagen sí las acepta). Si una referencia
   // guardada en el proyecto ya no tiene enlace vivo, se queda fuera y se avisa.
-  const refs = await refsParaVideo(refUrls, (m)=>{ if(setStatus) setStatus(' ⚠️ ' + m); });
+  // EL AVISO TIENE QUE VERSE. Iba a setStatus, y la línea siguiente lo pisa con
+  // «generando video con…» en el mismo instante: el mensaje que decía «esta toma
+  // va SIN una de tus referencias» duraba microsegundos y nadie lo leía nunca.
+  // Pagabas el video convencido de que salió con tu personaje. Los toast no los
+  // pisa el estado, y este dura nueve segundos.
+  const refs = await refsParaVideo(refUrls, (m)=>{
+    if(setStatus) setStatus(' ⚠️ ' + m);
+    if(String(m).indexOf('No pude darle un enlace') === 0){ try{ toast('⚠️ ' + m, 9000); }catch(e){} }
+  });
   let ultimo = null;
   for(let i=0;i<pasos.length;i++){
     const p = pasos[i];
@@ -11749,6 +11757,16 @@ function guardarProyecto(){
   if(i >= 0) lista[i] = registro; else lista.push(registro);
   guardarListaProyectos(lista);
   state.proyectoAbierto = nombre;
+  // EL GASTO DE ANTES DE PONERLE NOMBRE TAMBIÉN ES DE ESTE PROYECTO. Todo lo que
+  // generas antes de guardar queda apuntado a «(sin guardar)», y la caja «Este
+  // video lleva gastado $X» del montaje solo suma lo que lleva el nombre del
+  // proyecto: enseñaba bastante menos de lo que costó. Se le pasa igual que se
+  // le pasan los archivos sueltos con adoptarSueltos.
+  try{
+    let adoptados = 0;
+    (state.gastos || []).forEach(g=>{ if(g && g.proyecto === '(sin guardar)'){ g.proyecto = nombre; adoptados++; } });
+    if(adoptados){ guardarGastos(); pintarResumenGasto(); }
+  }catch(e){}
   saveSession();
   pintarProyectoAbierto();
   // Lo que se generó antes de ponerle nombre estaba en "_sin-guardar": ahora que
@@ -16634,7 +16652,25 @@ async function animadoPaso5(){
     state.animado.auditoriaStoryboard = null;
     state.animado.auditoriaTomas = null;
     state.animado.auditoriaPlan = null;
+    // Y CADUCA TAMBIÉN TODO LO QUE COLGABA DEL STORYBOARD VIEJO.
+    // Faltaban dos cosas y las dos se notaban:
+    //  · El «storyboard definitivo» del paso 7 salió del anterior, y manda sobre
+    //    este. Si se deja puesto, en pantalla ves las escenas NUEVAS y las tomas,
+    //    el plan y las auditorías siguen usando las viejas — regenerar no servía
+    //    de nada y no había forma de saberlo.
+    //  · El plan de imágenes es del storyboard anterior, con otra numeración.
+    //    Se marca como caducado para que la cadena entera lo recalcule en vez de
+    //    pagar imágenes de escenas que ya no existen.
+    if(state.animado.step7 && (state.animado.step7.storyboard_definitivo||[]).length){
+      state.animado.step7 = null;
+      toast('El storyboard nuevo manda: se suelta la versión del paso 7, que era del anterior.', 7000);
+    }
+    if(state.animado.step9 && (state.animado.step9.imagenes||[]).length) state.animado.planDesactualizado = true;
     soltarPromptsDeTomas();   // storyboard nuevo: las tomas se rehacen desde él
+    // Las tomas ya armadas son las de antes: se rearman desde las escenas nuevas.
+    if((state.animado.tomas||[]).length){
+      try{ state.animado.tomas = enOrdenDeEscena(mejorStoryboard()); renderTomasFinales(state.animado.tomas); }catch(e){}
+    }
     renderPaso5(parsed);
     document.getElementById('panelA6').classList.remove('hidden');
     // Con el storyboard hecho ya se puede seguir: antes la unica puerta a los pasos
