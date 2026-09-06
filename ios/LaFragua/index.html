@@ -5563,6 +5563,17 @@ async function wsGenerateTalkingClip(dialogText, avatarImgUrls, vozDescripcion, 
     if(statusCb) statusCb(' generando la voz (TTS)...');
     audioUrl = await wsGenerateAudio(dialogText, voiceId);
   }
+  // LA VOZ DE UNA TOMA HABLADA TAMBIÉN SE PAGA. Por este camino (WaveSpeed) son
+  // DOS generaciones: la locución y el clip con los labios. Pero el botón hace un
+  // solo runGen —de tipo video—, así que solo se apuntaba el clip: la voz salía
+  // gratis en el contador. Se apunta aquí, con su propio precio y sin tocar el
+  // coste real que vaya a traer el video después.
+  try{
+    const guardaCoste = _costeRealUltimo;
+    apuntarGasto((_currentGenId || 'take') + '-voz', 'audio', 'Locución de la toma hablada',
+                 {caracteres: String(dialogText || '').length || 300}, null);
+    _costeRealUltimo = guardaCoste;
+  }catch(e){}
   if(statusCb) statusCb(' voz lista — sincronizando labios y acciones con InfiniteTalk...');
   const lipsyncParams = {image: avatarImgUrl, audio: audioUrl, resolution:'720p', seed:-1};
   // CRÍTICO: sin esto, InfiniteTalk solo anima la foto (parpadeo/cabeceo genérico) e ignora por completo las acciones del guion — el campo "prompt" es lo que le dice qué hacer mientras habla.
@@ -7300,9 +7311,17 @@ async function asegurarProducto(url, setStatus){
     // coste real de la generación de origen, así que runGen acababa apuntando el
     // precio de la CORRECCIÓN como si fuera el de toda la generación: se perdía
     // una imagen entera del contador cada vez que el envase salía mal.
+    // Y CADA UNA CON SU PRECIO, NO CON EL DE LA OTRA. Aquí quedaba un hueco: la
+    // corrección va a OpenAI primero, y OpenAI no dice lo que cobra — así que
+    // `_costeRealUltimo` seguía teniendo el coste de la imagen DE ORIGEN, y el
+    // apunte de la corrección se lo llevaba marcado como coste REAL. Resultado:
+    // el mismo precio contado dos veces y la corrección sin cotizar. Se pone a
+    // cero antes, así lo que quede es de la corrección y de nadie más.
     const costeDeLaDeOrigen = _costeRealUltimo;
+    _costeRealUltimo = null;
     const corregida = await corregirProductoAuto(url, v.que_falla, setStatus);
-    try{ apuntarGasto('auto-producto', 'imagen', 'Corrección automática del envase'); }catch(e){}
+    const costeDeLaCorreccion = _costeRealUltimo;   // null si la hizo OpenAI: se estima
+    try{ apuntarGasto('auto-producto', 'imagen', 'Corrección automática del envase', {}, costeDeLaCorreccion); }catch(e){}
     _costeRealUltimo = costeDeLaDeOrigen;   // la de origen sigue valiendo lo suyo
     if(setStatus) setStatus(' 🔍 verificando la corrección...');
     const v2 = await verificarProducto(corregida);
@@ -11712,9 +11731,14 @@ function guardarProyecto(){
     const i = lista.findIndex(p=>p.nombre === state.proyectoAbierto);
     const registro = {nombre: state.proyectoAbierto, fecha: new Date().toISOString(), datos: sinDataUrls(instantaneaTrabajo())};
     if(i >= 0) lista[i] = registro; else lista.push(registro);
-    guardarListaProyectos(lista);
+    // SOLO SE DICE «GUARDADO» SI SE GUARDÓ. Esto no miraba el resultado: con el
+    // almacén lleno no se escribía nada y en pantalla ponía «Guardado ✓» igual.
+    // Seguías trabajando encima creyendo que estaba a salvo. El autoguardado ya
+    // comprobaba; el botón de guardar a mano, que es el que de verdad usas, no.
+    const seGuardo = guardarListaProyectos(lista);
     try{ copiaEnDisco(true); }catch(e){}
-    toast('Guardado en «'+state.proyectoAbierto+'» ✓');
+    if(seGuardo) toast('Guardado en «'+state.proyectoAbierto+'» ✓');
+    else toast('⚠️ NO se pudo guardar: no cabe en el navegador. La copia en disco sí se hizo — borra algún proyecto viejo en 📁 Proyecto.', 9000);
     return;
   }
   const sugerido = (productoActivo()||{}).nombre || 'proyecto';
@@ -12006,9 +12030,26 @@ async function borrarProyecto(){
     'Solo borra lo guardado, no lo que tengas ahora en pantalla.',
     lista.map(p=>p.nombre + '   ·   ' + (p.fecha||'').slice(0,10)));
   if(i === null || !lista[i]) return;
-  if(!confirm('¿Borrar "'+lista[i].nombre+'"?')) return;
-  lista.splice(i,1);
-  guardarListaProyectos(lista);
+  const nombre = lista[i].nombre;
+  if(!confirm('¿Borrar "'+nombre+'"?')) return;
+  // SE VUELVE A LEER LA LISTA, NO SE USA LA DE HACE UN MINUTO. Entre que se abre
+  // el selector y eliges, el autoguardado (cada 15 s) puede haber escrito una
+  // versión más nueva del proyecto que tienes abierto. Guardar aquí la copia
+  // vieja lo revertía en silencio a como estaba al abrir el selector — y la
+  // pantalla seguía diciendo «💾 guardado HH:MM», así que ni te enterabas.
+  const actual = listaProyectos().filter(p => p && p.nombre !== nombre);
+  if(!guardarListaProyectos(actual)) return;   // él ya avisa si no cupo
+  // Y SI BORRASTE EL QUE TENÍAS ABIERTO, SE SUELTA. Si no, el autoguardado lo
+  // vuelve a meter a los quince segundos: borrar para hacer sitio —que es justo
+  // lo que recomienda el aviso de almacén lleno— no liberaba nada.
+  if(state.proyectoAbierto === nombre){
+    state.proyectoAbierto = null;
+    try{ _firmaGuardada = firmaDelTrabajo(); }catch(e){}
+    try{ pintarProyectoAbierto(); }catch(e){}
+    try{ saveSession(); }catch(e){}
+    toast('Borrado. Lo que ves en pantalla sigue aquí, pero ya no está guardado en ningún sitio: dale a 💾 Guardar si lo quieres.', 9000);
+    return;
+  }
   toast('Proyecto borrado');
 }
 
