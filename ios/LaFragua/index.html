@@ -4560,15 +4560,18 @@ async function amPollResult(taskId, opts={}){
   const interval = opts.intervalMs || 3000;
   const maxMs = opts.maxMs || 240000;
   const start = Date.now();
+  // Mismo cuidado que en WaveSpeed: aquí la tarea YA está creada y cobrada, así que
+  // todo lo que sea pasajero se marca como viva. Ver el comentario de wsPollResult.
+  const vivo = (msg)=>{ const e = new Error(msg); e.amTaskId = taskId; return e; };
   while(Date.now() - start < maxMs){
     let res;
     try{
       res = await fetch(amUrl('/v1/tasks/'+taskId+'?language=en'), {headers:{'Authorization':'Bearer '+state.amKey}});
-    }catch(e){ throw new Error('No se pudo conectar con APImart al consultar el resultado ('+e.message+')'+AM_CORS_HINT); }
+    }catch(e){ throw vivo('No se pudo conectar con APImart al consultar el resultado ('+e.message+'). La tarea SIGUE VIVA y ya está cobrada: usa «⏳ Seguir esperando», no la regeneres.'+AM_CORS_HINT); }
     let body;
-    try{ body = await res.json(); }catch(e){ throw new Error('APImart no devolvió JSON válido al consultar el resultado.'); }
-    if(body.error) throw new Error('APImart: '+(body.error.message||'fallo al consultar el resultado'));
-    const data = body.data;
+    try{ body = await res.json(); }catch(e){ throw vivo('APImart no devolvió JSON válido al consultar el resultado. La tarea sigue viva: usa «⏳ Seguir esperando».'); }
+    if(body.error) throw vivo('APImart: '+(body.error.message||'fallo al consultar el resultado')+'. La tarea sigue viva: usa «⏳ Seguir esperando».');
+    const data = body.data || {};
     if(data.status === 'completed'){
       // EL COSTE REAL VIENE AQUÍ Y SE ESTABA TIRANDO. El gasto se apuntaba con
       // una estimación a ojo (un precio fijo por imagen y otro por segundo de
@@ -4764,16 +4767,27 @@ async function wsPollResult(getUrl, opts={}){
   const maxMs = opts.maxMs || 240000;
   const start = Date.now();
   const pollUrl = wsRewriteGetUrl(getUrl);
+  /* LA TAREA YA ESTÁ LANZADA Y COBRADA CUANDO SE ENTRA AQUÍ.
+     Solo el camino del «se agotó el tiempo» colgaba la pista de la tarea viva; un
+     tropiezo de red, un JSON raro o un 502 pasajero lanzaban un Error pelado. Y de
+     esa pista dependen TRES protecciones: la cadena de modelos («tarea ya lanzada,
+     no se reintenta con otro modelo, se pagaría dos veces»), el reintento de la
+     cola, y el botón «⏳ Seguir esperando». Sin ella, un corte de wifi de dos
+     segundos hacía que la cadena mandara el MISMO video al siguiente proveedor:
+     dos videos pagados y solo uno recogido. Ahora todo lo que sea pasajero se
+     marca; solo los estados en los que el proveedor dice que la tarea murió van
+     sin marca, que ahí sí toca probar con otro modelo. */
+  const vivo = (msg)=>{ const e = new Error(msg); e.wsGetUrl = getUrl; return e; };
   while(Date.now() - start < maxMs){
     let res;
     try{
       res = await fetch(pollUrl, {headers:{'Authorization':'Bearer '+state.wsKey}});
     }catch(e){
-      throw new Error('No se pudo conectar con WaveSpeed al consultar el resultado ('+e.message+')'+WS_CORS_HINT);
+      throw vivo('No se pudo conectar con WaveSpeed al consultar el resultado ('+e.message+'). La tarea SIGUE VIVA y ya está cobrada: usa «⏳ Seguir esperando», no la regeneres.'+WS_CORS_HINT);
     }
     let body;
-    try{ body = await res.json(); }catch(e){ throw new Error('WaveSpeed no devolvió JSON válido al consultar el resultado.'); }
-    if(body.code !== 200){ throw new Error('WaveSpeed: '+(body.message||'fallo al consultar el resultado')); }
+    try{ body = await res.json(); }catch(e){ throw vivo('WaveSpeed no devolvió JSON válido al consultar el resultado. La tarea sigue viva: usa «⏳ Seguir esperando».'); }
+    if(body.code !== 200){ throw vivo('WaveSpeed: '+(body.message||'fallo al consultar el resultado')+'. La tarea sigue viva: usa «⏳ Seguir esperando».'); }
     const data = body.data;
     if(data.status === 'completed') return data.outputs||[];
     if(['failed','cancelled','timeout'].includes(data.status)){
@@ -5265,7 +5279,21 @@ async function autoResolvePendingTasks(){
       clearPendingTask(genId);
       refreshAllRefChips();
     }catch(err){
-      if(statusEl) statusEl.textContent = ' ⏳ resultado pendiente — se revisa solo cada 25s, no hace falta hacer nada.';
+      // NO SE PISA UN ERROR DE VERDAD CON «PENDIENTE». Si la cadena ya falló y
+      // pintó su motivo («Fallaron los 7 modelos…»), este mensaje lo borraba 25 s
+      // después y la tarjeta se quedaba así para siempre —también tras recargar—:
+      // esperando algo que no iba a llegar, y sin poder ver ya por qué falló.
+      // Y se deja de insistir: a los 40 intentos (unos 17 minutos) se suelta.
+      info.intentos = (info.intentos || 0) + 1;
+      if(info.intentos > 40){
+        clearPendingTask(genId);
+        if(statusEl && statusEl.textContent.indexOf('⏳') >= 0){
+          statusEl.textContent = ' ⚠️ Se dejó de esperar: el proveedor no devolvió nada en 17 minutos. Mira tu panel del proveedor antes de regenerar, no vaya a estar ya hecha.';
+        }
+        continue;
+      }
+      const yaHayError = statusEl && /⚠️|Fallaron|no se pudo|error/i.test(statusEl.textContent || '');
+      if(statusEl && !yaHayError) statusEl.textContent = ' ⏳ resultado pendiente — se revisa solo cada 25s, no hace falta hacer nada.';
     }
   }
   if(!_autoResolveTimer) _autoResolveTimer = setInterval(autoResolvePendingTasks, 25000);
@@ -6956,6 +6984,31 @@ function refDelPlan(id){
 /// orden: la que el usuario haya fijado a mano, la primera imagen del grupo
 /// REFERENCIA del plan, o el avatar/modelo de la ficha. Es la que manda sobre
 /// la cara en todas las escenas.
+/* UNA COCINA NO ES UNA CARA.
+   El plan mete en el grupo REFERENCIA dos cosas distintas: las hojas de personaje
+   Y las referencias de ENTORNO (una por cada sitio que se repita en dos o más
+   escenas). Todo lo que estuviera en ese grupo se trataba como si fuera una cara:
+   se adjuntaba como referencia de identidad y el candado acababa diciendo, literal,
+   «The 2nd attached reference image is la cocina: that face, that hair, that skin
+   and that build belong to la cocina and to nobody else». La cara del personaje
+   salía inventada o mezclada con la foto de un cuarto vacío, en una imagen pagada.
+   Se descarta solo cuando está claro que es un entorno: ante la duda sigue contando
+   como cara, que perder el candado de identidad también se paga. */
+function esHojaDeEntorno(h){
+  if(!h) return false;
+  const t = (String(h.titulo || '') + ' ' + String(h.para_que || '')).toLowerCase();
+  if(/hoja de personaje|character sheet|personaje|retrato/.test(t)) return false;
+  if(/entorno|escenario|locaci|set de|decorado|fondo fijo|environment|location|backdrop/.test(t)) return true;
+  // El plan marca con entorno_id las que definen un sitio; si además no lleva
+  // persona, no hay ninguna cara ahí dentro.
+  if(h.entorno_id && h.lleva_persona !== true && h.tiene_personaje !== true) return true;
+  return false;
+}
+/// Las hojas del plan que de verdad son CARAS.
+function hojasDePersonaje(plan, gen){
+  return (plan || []).filter(x => x && x.grupo === 'REFERENCIA' && gen[x.id] && !esHojaDeEntorno(x));
+}
+
 function hojaDePersonaje(esDelAnimado){
   const A = state.assets || {};
   // EL MODO SE PUEDE PASAR A MANO, Y HAY QUE PASARLO. Adivinarlo con
@@ -6981,7 +7034,7 @@ function hojaDePersonaje(esDelAnimado){
   if(A.character_sheet && !animado) return A.character_sheet;
   const plan = (state.animado.step9 && state.animado.step9.imagenes) ? state.animado.step9.imagenes : [];
   const refPlan = plan.slice().sort((a,b)=>(a.orden||0)-(b.orden||0))
-                      .find(x => x && x.grupo === 'REFERENCIA' && state.animado.imagenes[x.id]);
+                      .find(x => x && x.grupo === 'REFERENCIA' && state.animado.imagenes[x.id] && !esHojaDeEntorno(x));
   if(refPlan) return state.animado.imagenes[refPlan.id];
   // En el animado, antes de caer en una foto real, mejor no devolver nada: sin
   // referencia el modelo se inventa una cara, pero al menos la dibuja en el estilo
@@ -7005,7 +7058,7 @@ function hojaDePersonaje(esDelAnimado){
 function hojaDePersonajeParaImagen(im){
   const plan = (state.animado.step9 && state.animado.step9.imagenes) ? state.animado.step9.imagenes : [];
   const gen = state.animado.imagenes || {};
-  const hojas = plan.filter(x => x && x.grupo === 'REFERENCIA' && gen[x.id]);
+  const hojas = hojasDePersonaje(plan, gen);
   if(!im || !hojas.length) return hojaDePersonaje(true);
 
   // (1) Subir por la cadena hasta encontrar la hoja de la que depende de verdad.
@@ -7015,7 +7068,7 @@ function hojaDePersonajeParaImagen(im){
     vistos[id] = 1;
     const nodo = plan.find(x => x && x.id === id);
     if(!nodo) return null;
-    if(nodo.grupo === 'REFERENCIA' && gen[nodo.id]) return gen[nodo.id];
+    if(nodo.grupo === 'REFERENCIA' && gen[nodo.id] && !esHojaDeEntorno(nodo)) return gen[nodo.id];
     for(const padre of (nodo.ref_de||[])){ const r = porLaCadena(padre); if(r) return r; }
     return null;
   };
@@ -7121,7 +7174,7 @@ function hojaPorPersonaje(im, hojas, gen){
 function hojasParaImagen(im){
   const plan = (state.animado.step9 && state.animado.step9.imagenes) ? state.animado.step9.imagenes : [];
   const gen = state.animado.imagenes || {};
-  const hojas = plan.filter(x => x && x.grupo === 'REFERENCIA' && gen[x.id]);
+  const hojas = hojasDePersonaje(plan, gen);
   const principal = hojaDePersonajeParaImagen(im);
   const fuera = [];
   const yaTengo = new Set();   // nombres de personaje ya cubiertos
@@ -7155,7 +7208,7 @@ function hojasConNombre(im){
   const plan = (state.animado.step9 && state.animado.step9.imagenes) ? state.animado.step9.imagenes : [];
   const gen = state.animado.imagenes || {};
   const porUrl = {};
-  plan.forEach(x=>{ if(x && x.grupo === 'REFERENCIA' && gen[x.id]) porUrl[gen[x.id]] = _nombreDeLaHoja(x) || x.id; });
+  plan.forEach(x=>{ if(x && x.grupo === 'REFERENCIA' && gen[x.id] && !esHojaDeEntorno(x)) porUrl[gen[x.id]] = _nombreDeLaHoja(x) || x.id; });
   return hojasParaImagen(im).map(u => ({url:u, nombre: porUrl[u] || ''}));
 }
 
@@ -10147,10 +10200,20 @@ function pasosParaTexto(texto, refs){
 }
 
 function pasosParaImagen(im, refs){
-  if(im && (im.necesita_foto_producto || im.grupo === 'PRODUCTO')) return oaPrimero();
-  // La casilla «sin censura» del paso 5 manda por encima de todo lo demás: si está
-  // marcada, NINGUNA imagen pasa por OpenAI, vaya el prompt como vaya.
-  if(sinCensuraActivo()) return leerCadena('fragua_cadena_cuerpo', CADENA_CUERPO);
+  const llevaProducto = !!(im && (im.necesita_foto_producto || im.grupo === 'PRODUCTO'));
+  // LA CASILLA «SIN CENSURA» MANDA, Y ANTES NO MANDABA EN LA IMAGEN QUE MÁS VENDE.
+  // La comprobación del producto estaba ARRIBA de esta, así que las imágenes donde
+  // sale el envase —justo las de ella con el cuerpo del DESPUÉS sosteniéndolo— se
+  // iban a OpenAI primero aunque la casilla estuviera marcada. Y OpenAI es el que
+  // censura y el que aplana el cuerpo. El texto de la casilla promete «TODAS las
+  // imágenes van directas a los modelos que no rechazan, vaya el prompt como
+  // vaya»: eso ahora se cumple. OpenAI se queda de último recurso en las del
+  // producto, para que si fallan todos los demás el envase salga igual.
+  if(sinCensuraActivo()){
+    const sinCensura = leerCadena('fragua_cadena_cuerpo', CADENA_CUERPO);
+    return llevaProducto ? sinCensura.concat([{prov:'openai', modelo:''}]) : sinCensura;
+  }
+  if(llevaProducto) return oaPrimero();
   // CUERPO: si la imagen lleva antes/después o una lista de cuerpos, va derecha a
   // la cadena de los que bordan el cuerpo — medida con dinero real, no a ojo.
   // Detrás de seedream quedan qwen, wan y grok, así que ya no hay imagen que se
@@ -10298,11 +10361,18 @@ async function arreglarPromptImagen(im){
     if(!v.prompt_corregido) throw new Error('la IA no devolvió un prompt corregido');
     ocultarCarga();
 
-    const esAntes = (v.tipo||'').toLowerCase().indexOf('antes') >= 0;
-    const esDespues = /despu/.test((v.tipo||'').toLowerCase());
-    const clase = esAntes ? 'antes' : esDespues ? 'despues' : '';
-    const emo = esAntes ? '😔' : esDespues ? '🔥' : '🖼️';
-    const nombre = esAntes ? 'ES UN ANTES' : esDespues ? 'ES UN DESPUÉS' : 'IMAGEN NEUTRA';
+    // UNA IMAGEN MIXTA NO ES NEUTRA. En «LA PRUEBA CON DOS» —las dos mujeres en el
+    // mismo cuadro, una transformada y la otra no— el veredicto salía como
+    // «🖼️ IMAGEN NEUTRA · No hay cuerpo que juzgar», y si aceptabas se guardaba
+    // fase:'neutra' ENCIMA del 'mixta' que traía el plan. Con eso se pierde el
+    // candado doble y las dos salen iguales. Si la imagen tiene cuerpos en fases
+    // opuestas, eso manda sobre lo que diga la revisión.
+    const eraMixta = (im && (im.fase === 'mixta' || tieneCuerposMixtos(im)));
+    const esAntes = !eraMixta && (v.tipo||'').toLowerCase().indexOf('antes') >= 0;
+    const esDespues = !eraMixta && /despu/.test((v.tipo||'').toLowerCase());
+    const clase = eraMixta ? 'mixta' : esAntes ? 'antes' : esDespues ? 'despues' : '';
+    const emo = eraMixta ? '👯' : esAntes ? '😔' : esDespues ? '🔥' : '🖼️';
+    const nombre = eraMixta ? 'DOS CUERPOS EN FASES DISTINTAS' : esAntes ? 'ES UN ANTES' : esDespues ? 'ES UN DESPUÉS' : 'IMAGEN NEUTRA';
     const sub = esAntes ? 'Se le prohíben las curvas: sale plana, caída y sin forma.'
               : esDespues ? 'Sale sexy y exagerada, con brazos, hombros y espalda femeninos.'
               : 'No hay cuerpo que juzgar en esta imagen.';
@@ -10332,7 +10402,8 @@ async function arreglarPromptImagen(im){
       // El veredicto se GUARDA. Antes se enseñaba en el aviso y se tiraba: al
       // generar se volvía a adivinar por palabras y podía salir lo contrario de
       // lo que acababas de aprobar.
-      im.fase = esAntes ? 'antes' : esDespues ? 'despues' : 'neutra';
+      // Y la mixta se respeta: no se pisa con 'neutra' (ver arriba).
+      im.fase = eraMixta ? 'mixta' : esAntes ? 'antes' : esDespues ? 'despues' : 'neutra';
       // Las imágenes de preparación no generan desde el <pre>, sino desde su
       // propio texto: por eso avisan con `alAplicar` de dónde hay que guardarlo.
       if(typeof im.alAplicar === 'function'){ try{ im.alAplicar(v.prompt_corregido); }catch(e){} }
@@ -11705,6 +11776,10 @@ function fundirAlTraer(k, valorEntrante){
   return JSON.stringify(Array.from(mapa.values()));
 }
 
+// Se expone para el boton «🔑 Importar llaves» de la barra del escritorio, que
+// vive en puente.js y hacia lo mismo sin fundir.
+try{ window.fundirAlTraer = fundirAlTraer; }catch(e){}
+
 async function procesarPaqueteTraido(crudo){
   let paquete;
   try{ paquete = JSON.parse(crudo); }
@@ -12033,9 +12108,14 @@ function _hashRapido(x){
 function firmaDelTrabajo(){
   const a = state.animado || {};
   return [
-    Object.keys(state.generados || {}).length,
+    // POR CONTENIDO, NO POR CUÁNTAS HAY. Regenerar una toma que YA tenía archivo
+    // (vid-3, voz-3, plan-REF-01) sustituye la entrada pero NO cambia el número de
+    // claves: la firma salía idéntica, el autoguardado decía «nada se movió», y al
+    // reabrir el proyecto volvía el video VIEJO. La generación nueva —ya pagada—
+    // quedaba huérfana y el montaje pegaba la vieja.
+    _hashRapido(state.generados || {}),
     Object.keys(state.edicionesPrompt || {}).length,
-    Object.keys(a.imagenes || {}).length,
+    _hashRapido(a.imagenes || {}),
     (a.tomas || []).length,
     _hashRapido(a.step4 || ''),
     _hashRapido(a.step5 || ''),
@@ -13190,7 +13270,12 @@ async function sincronizarCerebro(silencioso){
     //    propio almacén (es lo que se inyecta en los prompts de imagen); el
     //    resto, a los gustos de escritura.
     const deProducto = reglas.filter(x=>/^PRODUCTO:/i.test(x.t)).map(x=>x.t.replace(/^PRODUCTO:\s*/i,''));
-    localStorage.setItem('fragua_reglas_producto', deProducto.slice(-15).join('\n'));
+    // LAS 15 MÁS NUEVAS, NO LAS MÁS VIEJAS. `fundir` devuelve ordenado de más nuevo
+    // a más viejo, así que `slice(-15)` se quedaba justo con las ANTIGUAS y tiraba
+    // las recién aprendidas. La regla que acaba de salir de corregir un envase —que
+    // se pagó— se subía al gist y ninguna máquina la volvía a meter en un prompt:
+    // el mismo fallo de envase se repetía y se volvía a pagar la corrección.
+    localStorage.setItem('fragua_reglas_producto', deProducto.slice(0, 15).join('\n'));
     state.gustos = reglas.filter(x=>!/^PRODUCTO:/i.test(x.t)).map(x=>x.t).join('\n');
     localStorage.setItem('fragua_gustos', state.gustos);
     localStorage.setItem('fragua_vetadas', JSON.stringify(Array.from(vetadas)));
@@ -13213,6 +13298,34 @@ async function sincronizarCerebro(silencioso){
     if(!silencioso) toast('No se pudo sincronizar: ' + e.message);
     return false;
   }
+}
+
+/// Vacía las reglas del cerebro compartido dejando antes una copia con fecha en el
+/// mismo gist (`cerebro-antes-de-borrar.json`). El historial y las vetadas no se
+/// tocan: son otra cosa.
+async function vaciarReglasDelCerebro(){
+  const c = configCerebro();
+  if(!c.gist || !c.token) throw new Error('el cerebro compartido no está configurado');
+  const cab = {'Authorization':'Bearer '+c.token, 'Accept':'application/vnd.github+json'};
+  const r = await fetch('https://api.github.com/gists/'+c.gist, {headers:cab, cache:'no-store'});
+  if(!r.ok) throw new Error('no se pudo leer (HTTP '+r.status+')');
+  const g = await r.json();
+  const archivo = (g.files||{})['cerebro.json'];
+  let remoto = {};
+  try{ remoto = JSON.parse(archivo && archivo.content ? archivo.content : '{}') || {}; }catch(e){ remoto = {}; }
+  const copia = JSON.stringify({guardado:new Date().toISOString(), reglas: remoto.reglas||[]}, null, 1);
+  const nuevo = {version:1, actualizado:new Date().toISOString(), reglas:[],
+                 historial: remoto.historial||[], vetadas: remoto.vetadas||[]};
+  const w = await fetch('https://api.github.com/gists/'+c.gist, {
+    method:'PATCH', headers:Object.assign({'Content-Type':'application/json'}, cab),
+    body: JSON.stringify({files:{
+      'cerebro.json': {content: JSON.stringify(nuevo, null, 1)},
+      'cerebro-antes-de-borrar.json': {content: copia}
+    }})
+  });
+  if(!w.ok) throw new Error('no se pudo escribir (HTTP '+w.status+')');
+  localStorage.setItem('fragua_reglas_producto', '');
+  return true;
 }
 
 function pintarEstadoCerebro(){
@@ -13432,9 +13545,23 @@ function jvHallazgosHtml(h){
       : estado === 'adoptada'
       ? '<div style="font-size:11px; margin-top:4px; color:var(--ok,#4a9);">✅ adoptada — ya está en tus reglas</div>'
       : '<div style="display:flex; gap:6px; margin-top:6px;">' +
-        '<button class="btn small" data-jv-adoptar="'+i+'" title="La añade a tus reglas y la sube al cerebro compartido">✅ Adoptar</button>' +
-        '<button class="btn small" data-jv-vetar="'+i+'" title="La saca de todos los equipos y no vuelve a entrar jamás">🚫 Vetar</button></div>';
-    html += '<div class="jv-mejora">📏 <b>Regla propuesta</b> — no entra hasta que la adoptes: ' + escapeHtml(x) + pie + '</div>';
+        // EL BOTÓN LLEVA LA REGLA, NO UN NÚMERO DE ORDEN. Antes llevaba solo el
+        // índice y se resolvía contra una variable global que cualquier repintado
+        // posterior sustituye: si el parte que estabas mirando ya no era el último
+        // pintado, adoptabas o VETABAS otra regla distinta — y el veto es
+        // permanente y para todas las máquinas — mientras el recuadro que tocaste
+        // se ponía «🚫 vetada» sobre el texto que sí habías leído.
+        '<button class="btn small" data-jv-adoptar="1" data-jv-texto="'+escapeHtml(x)+'" title="La añade a tus reglas y la sube al cerebro compartido">✅ Adoptar</button>' +
+        '<button class="btn small" data-jv-vetar="1" data-jv-texto="'+escapeHtml(x)+'" title="La saca de todos los equipos y no vuelve a entrar jamás">🚫 Vetar</button></div>';
+    // LA ETIQUETA TIENE QUE DECIR LO QUE PASA DE VERDAD. Para las del cerebro
+    // nocturno decía «no entra hasta que la adoptes» — y ya habían entrado: están
+    // dentro del gist y la misma sincronización que abre este aviso las mete en
+    // tus gustos, desde donde se pegan a cada guion y cada prompt. Ahí lo útil no
+    // es «adoptar», es poder VETARLA.
+    const cabecera = h._deLaNube
+      ? '📏 <b>Regla del cerebro nocturno</b> — ya está entrando en tus prompts; vétala si no la quieres: '
+      : '📏 <b>Regla propuesta</b> — no entra hasta que la adoptes: ';
+    html += '<div class="jv-mejora">' + cabecera + escapeHtml(x) + pie + '</div>';
   });
   return html;
 }
@@ -13551,6 +13678,10 @@ function avisarParteNocturno(archivo){
   if(!archivo || !archivo.content) return;
   let p; try{ p = JSON.parse(archivo.content); }catch(e){ return; }
   if(!p || !p.fecha) return;
+  // Este parte viene del cerebro de la NUBE, y sus reglas YA están dentro del gist:
+  // la misma sincronización que abre este aviso las mete en tus gustos. Se marca
+  // para que la etiqueta diga la verdad en vez de «no entra hasta que la adoptes».
+  p._deLaNube = true;
   localStorage.setItem('fragua_jarvis_nube', archivo.content);
   const vista = localStorage.getItem('fragua_jarvis_nube_vista') || '';
   if(p.fecha <= vista) return;
@@ -13577,8 +13708,13 @@ function arrancarJarvis(){
     const b = e.target.closest && e.target.closest('[data-jv-adoptar],[data-jv-vetar]');
     if(!b) return;
     const esAdoptar = b.dataset.jvAdoptar !== undefined;
-    const i = parseInt(esAdoptar ? b.dataset.jvAdoptar : b.dataset.jvVetar, 10);
-    const texto = window._jvParte && (window._jvParte.reglas_nuevas||[])[i];
+    // La regla viaja en el propio botón (ver jvHallazgosHtml). Se deja el camino
+    // viejo por si quedara algún botón pintado por una versión anterior.
+    let texto = b.dataset.jvTexto || '';
+    if(!texto){
+      const i = parseInt(esAdoptar ? b.dataset.jvAdoptar : b.dataset.jvVetar, 10);
+      texto = (window._jvParte && (window._jvParte.reglas_nuevas||[])[i]) || '';
+    }
     if(!texto) return;
     b.closest('div').innerHTML = esAdoptar ? '✅ adoptada' : '🚫 vetada';
     if(esAdoptar) await adoptarPropuesta(texto); else await vetarPropuesta(texto);
@@ -16688,6 +16824,15 @@ async function auditarPlanImagenes(){
     try{ limpiarDependencias(plan); }catch(err){}
     state.animado.auditoriaPlan = {cuando: Date.now(), tocadas};
     saveSession();
+    // Y SE REPINTA EL PLAN. La auditoría corrige «ref_de» dentro de los datos, pero
+    // las tarjetas y sus chips de referencia siguen siendo las de ANTES — y al
+    // generar se lee lo que hay marcado en los chips. Así que la tabla decía
+    // «cuelga de: REF-03» y lo que viajaba de verdad era REF-01. La primera imagen
+    // que generabas tras auditar salía con las referencias viejas, ya pagada.
+    if(tocadas){
+      try{ renderPlanImagenes(state.animado.step9); }catch(err){}
+      try{ refreshAllRefChips(); }catch(err){}
+    }
 
     const esc = (x)=>escapeHtml(String(x==null?'':x));
     let h = '<div class="es-explain" style="border-left:3px solid var(--calm);"><b>🩺 Plan auditado.</b> ' +
@@ -17375,7 +17520,17 @@ window.addEventListener('DOMContentLoaded', ()=>{
       state.correcciones=[]; state.gustos=''; state.originalesPrompt={};
       localStorage.removeItem('fragua_correcciones'); localStorage.removeItem('fragua_gustos');
       localStorage.removeItem('fragua_gustos_en');
-      toast('Borrado — vuelve a aprender desde cero');
+      // BORRAR AQUÍ NO BORRABA NADA CON EL CEREBRO COMPARTIDO PUESTO: la siguiente
+      // sincronización —que se dispara sola— volvía a bajar TODAS las reglas del
+      // gist a fragua_gustos y a subirlas. Creías haber limpiado el estilo
+      // aprendido y seguía metiéndose en cada guion, cada idea y cada prompt.
+      // Ahora se vacía también allí, dejando antes una copia por si te arrepientes.
+      if(hayCerebroCompartido()){
+        try{ await vaciarReglasDelCerebro(); toast('Borrado aquí y en el cerebro compartido — queda una copia en el gist por si acaso', 9000); }
+        catch(e){ toast('Borrado aquí, pero NO en el cerebro compartido (' + e.message + '): volverán en la próxima sincronización.', 9000); }
+      }else{
+        toast('Borrado — vuelve a aprender desde cero');
+      }
     }
   };
   document.getElementById('btnVerHistorial').onclick = async ()=>{
