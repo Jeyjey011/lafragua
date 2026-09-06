@@ -16383,7 +16383,15 @@ async function auditarStoryboard(){
    Esto lo hace seguido, con las auditorías DENTRO, enseñando el precio antes y
    parándose en cuanto algo falla en vez de seguir gastando a ciegas.
 ============================================================ */
+/* «PARAR» Y «NO HAY NINGUNA CORRIENDO» SON DOS COSAS DISTINTAS.
+   El botón de parar ponía _cadenaCorriendo = false — el MISMO indicador que usa la
+   guarda de la entrada para saber si ya hay una en marcha. Pero la cadena sigue
+   viva dentro de su paso (un paso puede tardar minutos), así que si volvías a
+   darle a «Hacer el anuncio entero» pasabas la guarda y arrancaban DOS cadenas a
+   la vez sobre el mismo proyecto: generaciones duplicadas y pagadas dos veces.
+   Ahora hay dos: una dice si sigue viva, la otra si le diste a parar. */
 let _cadenaCorriendo = false;
+let _cadenaParar = false;
 
 /// ¿HAY PLAN, Y ES DEL STORYBOARD DE AHORA? Tener un step9 no basta: el paso 7
 /// («auditar como director») reescribe y RENUMERA las escenas y deja puesto
@@ -16436,15 +16444,16 @@ async function hacerElAnuncioEntero(){
   if(seguir !== 'ya') return;
 
   _cadenaCorriendo = true;
+  _cadenaParar = false;
   const caja = document.getElementById('cadenaEstado');
   const decir = (t)=>{
     if(!caja) return;
     caja.innerHTML = '<div class="es-explain">🚀 ' + escapeHtml(t) +
       ' <button class="btn small" id="btnPararCadena">✋ Parar</button></div>';
     const b = document.getElementById('btnPararCadena');
-    if(b) b.onclick = ()=>{ _cadenaCorriendo = false; toast('Se para al acabar este paso'); };
+    if(b) b.onclick = ()=>{ _cadenaParar = true; toast('Se para al acabar este paso'); };
   };
-  const sigue = ()=> _cadenaCorriendo;
+  const sigue = ()=> !_cadenaParar;
   // CADA PASO TIENE QUE HABER SALIDO BIEN ANTES DE PAGAR EL SIGUIENTE. Los pasos
   // se tragan sus propios errores (animadoError pinta la caja roja y no lanza
   // nada), así que la cadena seguía como si tal cosa: si el paso 9 fallaba, no
@@ -16475,7 +16484,7 @@ async function hacerElAnuncioEntero(){
     if(sigue()){ decir('Generando las voces y los videos. Puedes irte: te aviso al terminar.');
                  // El precio ya se aprobó arriba, y el «✋ Parar» viaja hacia dentro.
                  await crearTodoDeUna(state.animado.tomas || [], {sinPreguntar:true, sigue: sigue}); }
-    terminoBien = _cadenaCorriendo;
+    terminoBien = !_cadenaParar;
     if(caja){
       caja.innerHTML = terminoBien
         ? '<div class="es-explain">✅ <b>Listo.</b> Ya puedes montar el video final abajo.</div>'
@@ -16487,7 +16496,7 @@ async function hacerElAnuncioEntero(){
   }catch(err){
     if(caja) caja.innerHTML = '<div class="aviso-box">Se paró en un error: ' + escapeHtml(err.message) +
       '<br>Lo que ya estaba hecho se conserva — arregla eso y vuelve a darle.</div>';
-  }finally{ _cadenaCorriendo = false; }
+  }finally{ _cadenaCorriendo = false; _cadenaParar = false; }
 }
 
 /* ============================================================
