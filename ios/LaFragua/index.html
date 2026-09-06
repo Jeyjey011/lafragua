@@ -1453,6 +1453,11 @@ footer.app-footer{text-align:center; padding:30px 0 50px; color:var(--steel); fo
       <div class="field">
         <label>Producto (3-4 frases: qué es, cómo funciona, diferencial, promesa)</label>
         <textarea id="aProducto" rows="3" placeholder='Ej: "Cloudy. Una almohada ergonómica de viscoelástica diseñada para mantener la columna alineada toda la noche..."'></textarea>
+        <!-- QUÉ ANTES/DESPUÉS SE LE ESTÁ CONTANDO A LA IA. Esto se decidía solo, en
+             silencio, y se le pegaba a cada guion y cada prompt. Con su ficha real
+             acertaba la categoría equivocada («bajar de peso» en vez de «glúteos y
+             busto») y no había una sola forma de enterarse antes de pagar. -->
+        <div class="es-explain" id="categoriaDetectada" style="margin-top:6px;"></div>
       </div>
       <div class="grid2">
         <div class="field">
@@ -3628,10 +3633,20 @@ FORMA "auditoria" (paso 7) — auditas el guion y lo visual desde la mirada de u
     "entorno_id":"...",
     "tiene_personaje":true,
     "tiene_producto":false,
+    "fase":"antes|despues|mixta|neutra",
+    "personajes":[{"id":"a","quien_es":"quién es, en español y corto","donde_esta":"izquierda|derecha|centro|primer plano|fondo","voz":"mujer|hombre","rasgo_visual":"el detalle que la distingue a simple vista"}],
+    "dialogo":[{"personaje":"a","dice":"la frase EXACTA que suena en voz alta, sin comillas ni acotaciones","tono":"susurrando|gritando|seco|dulce|con rabia|entre lágrimas"}],
+    "cuerpos":[{"quien":"quién es, corto","donde_esta":"izquierda|derecha|centro|primer plano|fondo","fase":"antes|despues","emocion":"llorando|aguantando|rabia|incredula|humillada|victoriosa|feliz|burla|secreto|riendo"}],
     "subject_en":"...","action_en":"...","environment_en":"...","lighting_en":"...","camera":"..."
   }],
   "continua_en": 0
 }
+
+OJO CON EL REPARTO: "fase", "personajes", "dialogo" y "cuerpos" NO son opcionales aquí. El
+storyboard que auditas ya los trae decididos, y son lo que hace que el video ponga la frase en la
+boca correcta, que cada personaje salga con SU cuerpo (una transformada y la otra no) y que la ropa
+y el candado del cuerpo caigan donde toca. Si en tu versión mejorada una escena mantiene el mismo
+reparto, cópialo tal cual — pero NO lo dejes fuera. Dejarlos fuera obliga a rehacer el paso a mano.
 
 FORMA "producto_final" (paso 8) — te dan el producto REAL y deduces marca, tono, beneficios y diferenciales del contexto previo, sin inventar. Cero genérico:
 {
@@ -4901,6 +4916,24 @@ function assetsDelModo(genId, keys){
   return keys;
 }
 
+/* LO QUE DESMARCAS A MANO SE RECUERDA.
+   Las chips por defecto salen de `autoKeys`, y al repintar la fila se volvían a
+   marcar todas: como la fila se repinta después de CADA generación, desmarcar una
+   referencia no servía de nada — la quitabas, generabas otra cosa, y en la
+   siguiente ya estaba marcada otra vez y viajaba en el envío que pagas.
+   Se guarda por genId y por nombre de asset, en memoria: es una decisión de esta
+   sesión de trabajo, no algo que deba viajar al proyecto. */
+const _refsDesmarcadas = {};
+function recordarDesmarcadas(genId){
+  const fila = document.querySelector('.ref-chips-row[data-genid="' + String(genId).replace(/"/g,'\\"') + '"]');
+  if(!fila) return;
+  const fuera = new Set();
+  fila.querySelectorAll('input[data-refchip]').forEach(inp=>{
+    if(!inp.checked && inp.value && inp.value.indexOf('__fija') !== 0) fuera.add(inp.value);
+  });
+  _refsDesmarcadas[genId] = fuera;
+}
+
 function refChipsRowHtml(genId, autoKeys, extraCheckedKeys, kind, extras){
   const todas = Object.keys(state.assets).filter(k=>state.assets[k]);
   const keys = assetsDelModo(genId, todas);
@@ -4927,7 +4960,9 @@ function refChipsRowHtml(genId, autoKeys, extraCheckedKeys, kind, extras){
   const inputType = max<=1 ? 'radio' : 'checkbox';
   const chips = keys.map(k=>{
     const url = state.assets[k];
-    const checked = autoSet.has(k) || (extraCheckedKeys && extraCheckedKeys.has(k));
+    // Lo que quitaste a mano manda sobre el marcado por defecto (ver _refsDesmarcadas).
+    const quitada = _refsDesmarcadas[genId] && _refsDesmarcadas[genId].has(k);
+    const checked = !quitada && (autoSet.has(k) || (extraCheckedKeys && extraCheckedKeys.has(k)));
     return `<label class="ref-chip${checked?' checked':''}"><input type="${inputType}" name="refchip-${genId}" data-refchip="${genId}" value="${k}" ${checked?'checked':''}><img src="${url}" data-zoom="${url}" loading="lazy"><span>${labelForAsset(k)}</span></label>`;
   }).join('');
   return `<div class="ref-chips-row" data-genid="${genId}" data-autokeys="${autoAttr}" data-kind="${kind||''}"><span class="ref-chips-label">Referencias:</span>${chipsFijos}${chips}${btnPC}${btnTodas}${capNote}</div>`;
@@ -5186,6 +5221,7 @@ async function autoResolvePendingTasks(){
     const statusEl = document.getElementById('genstatus-'+genId);
     const resultEl = document.getElementById('genresult-'+genId);
     if(!resultEl) continue; // la tarjeta de esta tarea no está pintada en esta vista todavía — se revisa en la próxima pasada
+    const costeAntes = _costeRealUltimo;
     try{
       let url;
       if(info.wsGetUrl){
@@ -5201,7 +5237,13 @@ async function autoResolvePendingTasks(){
       // rescatado se veía en pantalla y para la app seguía SIN GENERAR. O sea, la
       // cola lo volvía a pedir y lo pagabas dos veces, y al recargar desaparecía.
       // Y encima no entraba en el contador de gasto, aunque ya estuviera pagado.
-      const miCoste = _costeRealUltimo;   // el que dejó ESTA consulta, no el de otra
+      // EL COSTE SOLO SE DA POR NUESTRO SI CAMBIÓ DURANTE NUESTRA PROPIA ESPERA.
+      // Este revisor corre en paralelo con lo que estés generando: leer el global
+      // a secas se traía el precio de OTRA generación, y encima lo apuntaba
+      // marcado como coste REAL. Si no cambió, se estima — un cálculo honesto vale
+      // más que un número exacto de otra cosa.
+      const miCoste = (_costeRealUltimo !== costeAntes) ? _costeRealUltimo : null;
+      _costeRealUltimo = costeAntes;      // se le devuelve lo suyo a quien lo tuviera
       renderGenResult(resultEl, url, info.kind, genId);
       try{ recordarGenerado(genId, url, info.kind, genId); }catch(e){}
       try{ apuntarGasto(genId, info.kind, genId, opcionesDeCoste(genId, info.kind), miCoste); }catch(e){}
@@ -5711,11 +5753,25 @@ async function subirIntensidad(genId){
   // caja de herramientas son `.toolkit-card` y las del modo real `.take-card`, así
   // que ahí el botón no encontraba nada y los doce solo sacaban «No encuentro el
   // prompt de este bloque». Doce botones que nunca funcionaron.
+  // EN UNA TOMA HABLADA ESTE BOTÓN NO PUEDE HACER NADA, y decía que sí. Lo que se
+  // envía es el diálogo y las acciones, no el <pre> (que además está oculto): se
+  // reescribía ese bloque, salía «Prompt reescrito» y 🔥 Intensidad subida, y el
+  // video salía EXACTAMENTE igual. El 📋 Copiar también seguía dando el viejo.
+  if(/^take-\d+$/.test(genId)){
+    toast('Aquí no sirve: en una toma hablada lo que se manda es el diálogo y las acciones, no ese prompt. Usa «⚡ Forjar cambio» en esa misma toma.', 9000);
+    return;
+  }
   const btnOrigen = document.querySelector('[data-intenso="' + genId + '"]');
   const contenedor = btnOrigen && btnOrigen.closest
     ? btnOrigen.closest('.card, .scene-card, .toolkit-card, .take-card, .panel')
     : null;
-  const pre = document.getElementById('planpre-' + genId.replace(/^plan-/,''))
+  // EL ID EXACTO PRIMERO. Sin esto caía en el querySelector del final, que
+  // devuelve el PRIMER bloque de la tarjeta — y las tarjetas de Creatividades y
+  // Variaciones llevan el 1:1 y el 9:16 DENTRO DE LA MISMA: pulsar 🔥 en el 9:16
+  // reescribía el 1:1, el botón del 9:16 se pintaba como «subida», y acababas
+  // generando el vertical con el prompt tibio y el cuadrado con uno que no pediste.
+  const pre = document.getElementById('pre-' + genId)
+           || document.getElementById('planpre-' + genId.replace(/^plan-/,''))
            || document.getElementById('vidtxt-' + genId.replace(/^vid-/,''))
            || document.getElementById(genId + '-out')
            || (contenedor ? contenedor.querySelector('pre.prompt-block, [contenteditable="true"].prompt-block') : null);
@@ -6206,7 +6262,37 @@ function forjaHtml(txt){
     '<span class="chispa"></span><span class="chispa"></span><span class="chispa"></span>' +
     '</span><span class="txt">' + escapeHtml(txt||'forjando...') + '</span></span>';
 }
-async function runGen(genId, kind, fn, altFn, etiqueta){
+/* DE UNA EN UNA, EN FILA.
+   `_currentGenId` y `_currentKind` son globales que pone runGen y que leen amSubmit
+   y wsSubmit MUCHO después —tras bajar referencias, subirlas a GitHub y esperar al
+   proveedor—. Si en esa ventana arrancabas una segunda generación, la tarea de la
+   PRIMERA se registraba con el id de la segunda: su resultado aparecía en la
+   tarjeta equivocada y se guardaba ahí (una URL de video metida como si fuera la
+   imagen de referencia REF-02, que a partir de ahí viaja a todas las tomas). Y si
+   la segunda terminaba antes, el `finally` ponía los globales a null y la tarea de
+   la primera no se registraba en ningún sitio: video pagado y perdido al recargar.
+   No se rechaza nada: se hace cola. Las cadenas y colas ya iban de una en una, así
+   que para ellas no cambia nada; lo que se arregla es el clic impaciente. */
+let _colaDeGeneracion = Promise.resolve();
+let _generandoAhora = null;
+function runGen(genId, kind, fn, altFn, etiqueta){
+  if(_generandoAhora && _generandoAhora !== genId){
+    const st = document.getElementById('genstatus-'+genId);
+    if(st) st.textContent = ' ⏳ en fila — primero termina «' + _generandoAhora + '»';
+  }
+  const tarea = ()=>runGenAhora(genId, kind, fn, altFn, etiqueta);
+  const siguiente = _colaDeGeneracion.then(tarea, tarea);
+  _colaDeGeneracion = siguiente.then(()=>{}, ()=>{});
+  return siguiente;
+}
+
+async function runGenAhora(genId, kind, fn, altFn, etiqueta){
+  _generandoAhora = genId;
+  try{ return await _runGenCuerpo(genId, kind, fn, altFn, etiqueta); }
+  finally{ if(_generandoAhora === genId) _generandoAhora = null; }
+}
+
+async function _runGenCuerpo(genId, kind, fn, altFn, etiqueta){
   const statusEl = document.getElementById('genstatus-'+genId);
   const resultEl = document.getElementById('genresult-'+genId);
   const btn = document.querySelector(`[data-gen="${genId}"]`);
@@ -6280,6 +6366,7 @@ async function resumirEspera(genId, kind, prevErr){
   if(btn) btn.disabled = true;
   const setStatus = (txt)=>{ if(statusEl) statusEl.textContent = txt; };
   setStatus(' consultando otra vez la misma tarea (no se está generando una nueva)...');
+  const costeAntes = _costeRealUltimo;
   try{
     let url;
     if(prevErr.wsGetUrl){
@@ -6294,7 +6381,10 @@ async function resumirEspera(genId, kind, prevErr){
     // resultado y lo enseñaba en pantalla, pero no lo apuntaba en state.generados:
     // para la app esa toma seguía sin hacer. La cola la volvía a generar y la
     // pagabas dos veces, y al recargar la página desaparecía.
-    const miCoste = _costeRealUltimo;   // el de ESTA tarea, antes de que lo pise otra
+    // Igual que en el revisor automático: solo se da por nuestro si cambió durante
+    // nuestra espera; si no, se estima en vez de apuntar el precio de otra cosa.
+    const miCoste = (_costeRealUltimo !== costeAntes) ? _costeRealUltimo : null;
+    _costeRealUltimo = costeAntes;
     try{ recordarGenerado(genId, url, kind, genId); }catch(e){}
     // Y SE APUNTA EL GASTO. Se guardaba en state.generados pero no en el contador:
     // cada video rescatado por aquí —que son los caros, los de 12 y 15 s— se pagó
@@ -6324,6 +6414,36 @@ async function resumirEspera(genId, kind, prevErr){
    contra las referencias de cortometraje, caza infografía disfrazada y saltos
    visuales imposibles, y devuelve guion definitivo + 2 variantes + storyboard elevado.
 ============================================================ */
+/* LO QUE NO PUEDE PERDERSE CUANDO UN PASO REESCRIBE LAS ESCENAS.
+   El reparto —quién sale, quién dice qué y en qué orden, en qué posición del
+   cuadro, con qué voz, y quién lleva el antes y quién el después— se decide UNA
+   vez, en el paso 5, y es lo que hace que el video ponga la frase en la boca
+   correcta y que cada personaje salga con su cuerpo. Los pasos que reescriben las
+   escenas (el paso 7 y la sincronización del guion) devolvían escenas sin esos
+   campos y se perdía todo, sin decir nada.
+   Se copia de la escena con el MISMO número, y solo lo que falte: si la versión
+   nueva trae su propio reparto, manda el suyo. */
+function heredarRepartoDeEscenas(nuevas, viejas){
+  if(!Array.isArray(nuevas) || !Array.isArray(viejas) || !viejas.length) return nuevas;
+  const antes = {};
+  viejas.forEach(e => { if(e && e.numero != null) antes[e.numero] = e; });
+  const traeAlgo = (v) => Array.isArray(v) ? v.length > 0 : !!(v && String(v).trim());
+  nuevas.forEach(e => {
+    const v = e && antes[e.numero];
+    if(!v) return;
+    ['fase','personajes','dialogo','cuerpos','emocion_clave','emocion_en','tiene_personaje','tiene_producto']
+      .forEach(k => {
+        if(traeAlgo(e[k])) return;
+        if(k === 'tiene_personaje' || k === 'tiene_producto'){
+          if(typeof e[k] !== 'boolean' && typeof v[k] === 'boolean') e[k] = v[k];
+          return;
+        }
+        if(traeAlgo(v[k])) e[k] = v[k];
+      });
+  });
+  return nuevas;
+}
+
 function mejorStoryboard(){
   if(state.animado.step7 && (state.animado.step7.storyboard_definitivo||[]).length) return state.animado.step7.storyboard_definitivo;
   return state.animado.step5 ? (state.animado.step5.escenas||[]) : [];
@@ -6350,6 +6470,14 @@ async function animadoPaso7(){
     const userContent = `Usa la FORMA "auditoria". Estilo de animación: ${estiloActual()} (STYLE LOCK: "${styleLockActual()}").\n${contextoAnimado()}\nGUION ACTUAL: ${JSON.stringify(state.animado.step4?state.animado.step4.guion:{})}\nPLAN VISUAL Y STORYBOARD ACTUAL: ${JSON.stringify(state.animado.step5)}`;
     const raw = await callClaude(SYSTEM_PROMPT_ANIMADO, userContent, 64000);
     const parsed = parseJsonLoose(raw);
+    // EL REPARTO NO SE PUEDE PERDER AQUÍ. La FORMA de este paso no pedía «fase»,
+    // «personajes», «dialogo» ni «cuerpos» (ya se pide, pero un modelo puede
+    // saltárselos igual), así que el storyboard definitivo volvía SIN quién dice
+    // qué, en qué orden, en qué posición del cuadro y con qué voz — y sin quién
+    // lleva el antes y quién el después. Los videos hablados salían con la frase
+    // en la boca equivocada y las dos mujeres con el mismo cuerpo. Lo que no
+    // vuelva se copia de la escena con el mismo número, que ya lo tenía decidido.
+    try{ heredarRepartoDeEscenas(parsed.storyboard_definitivo, mejorStoryboard()); }catch(e){}
     state.animado.step7 = parsed;
     renderPaso7(parsed);
     // El storyboard definitivo manda: lo que se construyó con el viejo queda obsoleto.
@@ -7661,9 +7789,16 @@ function renderRepChips(){
     cont.innerHTML = '<span class="toolkit-note">Todavía no has generado imágenes en esta sesión — pega las URLs de tu modelo abajo.</span>';
     return;
   }
-  cont.innerHTML = `<div class="ref-chips-row">` + keys.map(k=>
-    `<label class="ref-chip"><input type="checkbox" data-repchip value="${k}"><img src="${state.assets[k]}" data-zoom="${state.assets[k]}" loading="lazy"><span>${labelForAsset(k)}</span></label>`
-  ).join('') + `<span class="ref-chips-cap">máx. ${REP_MAX_REFS} (Seedance)</span></div>`;
+  // LO QUE YA TENÍAS MARCADO SE CONSERVA. Esta fila se repinta desde
+  // refreshAllRefChips, o sea después de CADA generación en cualquier parte de la
+  // app: se rehacía desde cero y las fotos de tu modelo que habías marcado en
+  // «Replicar video» se desmarcaban solas mientras trabajabas en otra pestaña. Al
+  // darle a Replicar te decía que no habías marcado ninguna, o mandaba menos.
+  const yaMarcadas = new Set(Array.from(cont.querySelectorAll('[data-repchip]:checked')).map(i=>i.value));
+  cont.innerHTML = `<div class="ref-chips-row">` + keys.map(k=>{
+    const m = yaMarcadas.has(k);
+    return `<label class="ref-chip${m?' checked':''}"><input type="checkbox" data-repchip value="${k}"${m?' checked':''}><img src="${state.assets[k]}" data-zoom="${state.assets[k]}" loading="lazy"><span>${labelForAsset(k)}</span></label>`;
+  }).join('') + `<span class="ref-chips-cap">máx. ${REP_MAX_REFS} (Seedance)</span></div>`;
   cont.querySelectorAll('[data-repchip]').forEach(inp=>{
     inp.onchange = ()=>{
       const marcadas = cont.querySelectorAll('[data-repchip]:checked');
@@ -7752,6 +7887,17 @@ async function adsPaso1(){
     const userContent = `Usa la FORMA "analisis".\nPRODUCTO: ${producto}\nMERCADO: ${mercado}${extra}`;
     const raw = await callClaude(SYSTEM_PROMPT_ADS, userContent, 32000);
     const parsed = parseJsonLoose(raw);
+    // ANÁLISIS NUEVO = LOS CREATIVOS DE ANTES YA NO VALEN. Esto solo repintaba el
+    // análisis y dejaba abajo, vivos y con sus botones, los 7 creativos del
+    // producto ANTERIOR — y encima irAPaso te lleva justo a ese panel. Pulsar
+    // «🌊 Generar las 14 imágenes» ahí pagaba catorce generaciones de un producto
+    // que ya no estabas anunciando, y la incoherencia se guardaba en el proyecto.
+    if(state.ads && state.ads.prompts){
+      state.ads.prompts = null;
+      const caja = document.getElementById('adsPromptsResult');
+      if(caja) caja.innerHTML = '<div class="aviso-box">El análisis es nuevo, así que los creativos de antes se han quitado: eran de la versión anterior. Dale a «✍️ Escribir los 7 prompts» para sacar los de este.</div>';
+      try{ soltarEdiciones(/^pre-ad-\d/); }catch(e){}
+    }
     state.ads.analisis = parsed;
     renderAdsAnalisis(parsed);
     renderStepsNavAds(1);
@@ -8728,6 +8874,7 @@ function seleccionarProducto(indice){
   const vs = document.getElementById('vProductoSel');
   if(vs) vs.value = (state.productoActivo===null || state.productoActivo===undefined) ? '' : String(state.productoActivo);
   renderSelectoresProducto();
+  try{ pintarCategoriaDetectada(); }catch(e){}
   return p;
 }
 
@@ -10663,7 +10810,16 @@ function armarPromptToma(n, e, avisar){
   const extra = ((document.getElementById('vidextra-'+n)||{}).value || '').trim();
   if(extra) texto = texto + '\n' + extra;
   // Cuerpo femenino + movimiento sexy (rebote y manos) si la toma revela el cuerpo.
-  texto = forzarVideoFemenino(texto, faseDeLaToma(n, e));
+  // DOS PERSONAS EN FASES DISTINTAS: CADA UNA CON SU CUERPO. El candado doble solo
+  // se usaba en las IMÁGENES del plan, nunca en el VIDEO. Así que en la toma que
+  // más vende —las dos mujeres en el mismo cuadro, una transformada y la otra
+  // no— se le pegaba un único candado para todo el cuadro y salían las dos
+  // iguales: o las dos planas o las dos con curvas. Y ahí se muere el anuncio.
+  if(tieneCuerposMixtos(e)){
+    texto = forzarCuerposMixtos(texto, e.cuerpos);
+  }else{
+    texto = forzarVideoFemenino(texto, faseDeLaToma(n, e));
+  }
   // Y si la escena dice que se desplaza, que se desplace de verdad (ver la toma 11).
   texto = forzarDesplazamiento(texto);
 
@@ -11794,6 +11950,16 @@ let _firmaGuardada = '';
 
 /// Firma barata del trabajo: cuántas cosas hay de cada tipo y cuánto ocupa el
 /// guion. No hace falta comparar 5 MB para saber si algo se movió.
+/// UN NÚMERO QUE CAMBIA SI CAMBIA EL TEXTO. `length` no basta: cambiar una palabra
+/// por otra del mismo largo —que es la mitad de las correcciones que hace— dejaba
+/// la firma idéntica, el autoguardado decía «nada se movió» y no escribía nada.
+function _hashRapido(x){
+  const t = (typeof x === 'string') ? x : JSON.stringify(x == null ? '' : x);
+  let h = 5381;
+  for(let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0;
+  return t.length + ':' + h.toString(36);
+}
+
 function firmaDelTrabajo(){
   const a = state.animado || {};
   return [
@@ -11801,9 +11967,11 @@ function firmaDelTrabajo(){
     Object.keys(state.edicionesPrompt || {}).length,
     Object.keys(a.imagenes || {}).length,
     (a.tomas || []).length,
-    JSON.stringify(a.step4 || '').length,
-    JSON.stringify(a.step5 || '').length,
-    JSON.stringify(a.step9 || '').length,
+    _hashRapido(a.step4 || ''),
+    _hashRapido(a.step5 || ''),
+    _hashRapido(a.step9 || ''),
+    _hashRapido(a.step7 || ''),
+    _hashRapido(a.tomas || ''),
     a.elegido ? 1 : 0,
     a.productoEstilo ? 1 : 0,
     // LOS CANDADOS DE CADA TOMA CUENTAN COMO TRABAJO. Se guardan en el proyecto
@@ -11817,9 +11985,20 @@ function firmaDelTrabajo(){
     JSON.stringify(state.quienHabla || {}),
     JSON.stringify(state.vozGenero || {}),
     JSON.stringify(state.fases || {}),
-    JSON.stringify(state.turnosDialogo || {}).length,
+    _hashRapido(state.turnosDialogo || {}),
+    _hashRapido(state.edicionesPrompt || {}),
     JSON.stringify(a.durToma || {}),
-    JSON.stringify(a.atrevimiento || '') + JSON.stringify(a.intensidad || '') + JSON.stringify(a.estilo || '')
+    JSON.stringify(a.atrevimiento || '') + JSON.stringify(a.intensidad || '') + JSON.stringify(a.estilo || ''),
+    // Y LOS OTROS MODOS, QUE FALTABAN ENTEROS. `result` (todo el UGC: guion,
+    // tomas, setup prompts), `ads` (los 7 creativos, que son una llamada de 64.000
+    // tokens), `c6` y `variaciones` están los cuatro en CLAVES_TRABAJO —o sea, se
+    // guardan— pero NO estaban en esta firma. Así que con un proyecto abierto, todo
+    // el trabajo hecho en esos modos no despertaba nunca al autoguardado: decía
+    // «nada se movió» y se saltaba la escritura. Al reabrir el proyecto, no estaba.
+    _hashRapido(state.result || ''),
+    _hashRapido(state.ads || ''),
+    _hashRapido(state.c6 || ''),
+    _hashRapido(state.variaciones || '')
   ].join('|');
 }
 
@@ -12169,6 +12348,11 @@ async function corregirImagen(genId, forzarOA){
   // Corregir es una generación pagada como cualquier otra: empieza el coste a cero
   // (para no heredar el de otra que falló) y se apunta al terminar.
   _costeRealUltimo = null;
+  // Y SE DICE QUIÉN ESTÁ GENERANDO. Esto no pasa por runGen, así que los globales
+  // se quedaban con el id de la generación ANTERIOR: si el proveedor devolvía una
+  // tarea en diferido, se registraba a nombre de otra tarjeta.
+  const guardaGen = _currentGenId, guardaKind = _currentKind;
+  _currentGenId = genId; _currentKind = 'imagen';
   try{
     // Corregir una imagen del modo animado no puede devolverla al mundo real.
     // Con el botón de OpenAI se va SOLO a OpenAI — si falla, se dice, no se
@@ -12203,6 +12387,7 @@ async function corregirImagen(genId, forzarOA){
       if(nota) nota.textContent = ' ⚠️ ' + err.message;
     }
   }finally{
+    _currentGenId = guardaGen; _currentKind = guardaKind;
     if(btn) btn.disabled = false;
     if(btnOA) btnOA.disabled = false;
   }
@@ -13816,16 +14001,11 @@ Ajusta el guion y las escenas para que concuerden con esas ediciones. Respeta lo
     const parsed = parseJsonLoose(raw);
     if(parsed.guion && state.animado.step4) state.animado.step4.guion = parsed.guion;
     if(parsed.escenas && parsed.escenas.length){
-      // El arco emocional no se pierde porque el modelo olvide devolverlo: si la
-      // escena vuelve sin emoción, se le repone la que ya tenía.
-      const antes = {};
-      (mejorStoryboard() || []).forEach(e=>{ if(e && e.numero != null) antes[e.numero] = e; });
-      parsed.escenas.forEach(e=>{
-        const v = antes[e.numero];
-        if(!v) return;
-        if(!(e.emocion_clave || '').trim()) e.emocion_clave = v.emocion_clave || '';
-        if(!(e.emocion_en    || '').trim()) e.emocion_en    = v.emocion_en    || '';
-      });
+      // Ni el arco emocional NI EL REPARTO se pierden porque el modelo olvide
+      // devolverlos: lo que falte se copia de la escena con el mismo número.
+      // Antes solo se repescaba la emoción, así que sincronizar el guion borraba
+      // quién dice qué, con qué voz y quién lleva el antes y quién el después.
+      try{ heredarRepartoDeEscenas(parsed.escenas, mejorStoryboard()); }catch(e){}
       if(state.animado.step7 && state.animado.step7.storyboard_definitivo) state.animado.step7.storyboard_definitivo = parsed.escenas;
       else if(state.animado.step5) state.animado.step5.escenas = parsed.escenas;
       state.animado.tomas = parsed.escenas;
@@ -13926,54 +14106,96 @@ const EMOCIONES = [
    imagen ya se ve bien, el cambio no existe.
 ============================================================ */
 const CATEGORIAS_PRODUCTO = [
-  { clave:'peso', etiqueta:'Bajar de peso',
+  { clave:'peso', fuerza:4, etiqueta:'Bajar de peso',
     pista:/adelgaz|bajar de peso|perder peso|quemar grasa|grasa|obesid|sobrepeso|detox|metabol|barriga|abdomen|hinchaz|celulit/i,
     antes:'visibly overweight and soft, rolls at the waist and back, thick untoned upper arms, a double chin, a puffy tired face, dull grey-toned skin, slumped shoulders, clothes tight and pulling at the seams',
     despues:'clearly slim and toned with visibly low body fat, a small flat defined abdomen, a sculpted narrow waist, slim arms with no sagging, a sharp defined jawline, no double chin, bright healthy glowing skin, upright confident posture, the same clothes now loose on the body' },
 
-  { clave:'volumen', etiqueta:'Glúteos, busto y curvas',
+  { clave:'volumen', fuerza:10, etiqueta:'Glúteos, busto y curvas',
     pista:/gl[uú]te|nalga|booty|bbl|busto|seno|pecho|curva|reloj de arena|volumen corporal/i,
     antes:'extremely thin and shapeless, completely flat glutes with no projection at all, a flat chest, stick-thin legs with knees wider than the thighs, a straight torso with no waist definition',
     despues:'large round lifted glutes with strong projection and a full lifted bust — the ONLY parts that grow — against a tiny cinched waist and a very small flat abs-defined stomach, shapely toned legs, slim arms and shoulders unchanged, an extreme lean low-body-fat hourglass, always slim and sexy, never heavier or overweight' },
 
-  { clave:'piel', etiqueta:'Piel y acné',
+  { clave:'piel', fuerza:8, etiqueta:'Piel y acné',
     pista:/piel|acn[eé]|mancha|arrug|colágeno|colageno|antiedad|poro|cicatri/i,
     antes:'skin covered in active acne, inflamed red blemishes, visible scarring and enlarged pores, uneven blotchy tone, dull and greasy',
     despues:'clear even skin with a natural healthy glow, no active blemishes, refined pores, smooth uniform tone, a couple of faint residual marks left so it reads as real' },
 
-  { clave:'cabello', etiqueta:'Cabello',
+  { clave:'cabello', fuerza:9, etiqueta:'Cabello',
     pista:/cabello|pelo|calvic|alopec|capilar|caída del pelo|caida del pelo/i,
     antes:'thin brittle lifeless hair, a visibly receding hairline with scalp showing through, split dry ends, flat with no volume',
     despues:'thick dense shiny hair with visible body and movement, a filled-in hairline, healthy ends, strong natural colour' },
 
-  { clave:'articulaciones', etiqueta:'Movilidad y articulaciones',
+  { clave:'articulaciones', fuerza:7, etiqueta:'Movilidad y articulaciones',
     pista:/articulac|rodilla|artriti|movilidad|dolor de espalda|columna|flexibil/i,
     antes:'moving stiffly and guarded, hand pressed to the lower back or knee, face tight with discomfort, hunched and cautious',
     despues:'moving freely and easily, standing tall, relaxed open expression, doing an everyday movement without hesitation' },
 
-  { clave:'energia', etiqueta:'Energía y cansancio',
+  { clave:'energia', fuerza:5, etiqueta:'Energía y cansancio',
     pista:/energ[ií]a|cansancio|fatiga|agotad|vitalidad|sue[ñn]o|insomnio/i,
     antes:'exhausted, dark circles under heavy eyes, slumped over a desk or sofa, dull skin, coffee cups around, no light in the face',
     despues:'alert and awake, bright clear eyes, upright and active, healthy skin tone, visibly full of energy' },
 
-  { clave:'digestion', etiqueta:'Digestión',
+  { clave:'digestion', fuerza:6, etiqueta:'Digestión',
     pista:/digest|estre[ñn]imiento|intestin|colon|enzima|fibra|inflamaci[oó]n abdominal/i,
     antes:'a visibly bloated distended belly, hand resting on the stomach, uncomfortable strained expression, clothes tight at the waist',
     despues:'a flat comfortable abdomen, relaxed posture, at ease, clothes sitting loose at the waist' },
 
-  { clave:'libido', etiqueta:'Vigor y deseo',
+  { clave:'libido', fuerza:8, etiqueta:'Vigor y deseo',
     pista:/libido|deseo sexual|erecc|testosterona|vigor|pr[oó]stata|potencia/i,
     antes:'low energy and withdrawn, shoulders dropped, avoiding eye contact, distance between the couple, defeated expression',
     despues:'confident and energetic, upright posture, direct assured eye contact, visible closeness and complicity with the partner' }
 ];
 
-/// La categoría a la que pertenece el producto activo, deducida de su ficha.
+/* GANA LA PISTA MÁS ESPECÍFICA, NO LA PRIMERA DE LA LISTA.
+   Esto usaba `.find()`, o sea la primera categoría que casara — y la primera de la
+   lista es «peso», cuya pista incluye «grasa», «abdomen», «barriga», palabras que
+   salen en la ficha de casi cualquier producto de este nicho.
+   Comprobado contra su ficha real: **BBL Pastillas casa con «peso» por la palabra
+   «grasa» y con «volumen» por «BBL», y ganaba «peso»**. Resultado: a su producto
+   estrella se le estaba contando a la IA, en CADA guion y CADA prompt, que el
+   ANTES es una mujer con michelines y papada y que el DESPUÉS es «delgada y
+   tonificada» — sin una palabra de glúteos ni de busto. Justo lo contrario de lo
+   que vende, y en contra de su propia regla del después.
+   `fuerza` dice cuánto de inequívoca es la pista: «bbl», «glúteo» o «busto» solo
+   aparecen si el producto va DE eso; «grasa» aparece en todos. */
 function categoriaDelProducto(){
   const f = productoActivo() || {};
   const texto = [f.nombre, f.descripcion, f.angulo, f.cliente_ideal, f.notas,
                  (document.getElementById('aProducto')||{}).value || ''].filter(Boolean).join(' ');
   if(!texto.trim()) return null;
-  return CATEGORIAS_PRODUCTO.find(c => c.pista.test(texto)) || null;
+  const casan = CATEGORIAS_PRODUCTO.filter(c => c.pista.test(texto));
+  if(!casan.length) return null;
+  if(casan.length === 1) return casan[0];
+  return casan.slice().sort((a, b) => (b.fuerza || 0) - (a.fuerza || 0))[0];
+}
+
+/// Lo pinta bajo el campo del producto. Es lo único que le diría, antes de pagar
+/// doce imágenes, que la app cree que su producto va de otra cosa.
+function pintarCategoriaDetectada(){
+  const el = document.getElementById('categoriaDetectada');
+  if(!el) return;
+  const todas = categoriasQueCasan();
+  if(!todas.length){ el.innerHTML = ''; return; }
+  const gana = todas[0];
+  const otras = todas.slice(1);
+  el.innerHTML = '🎯 El antes/después que se le manda a la IA es el de <b>' + escapeHtml(gana.etiqueta) + '</b>.' +
+    (otras.length ? ' <span style="color:var(--text-dim);">También encajaba: ' +
+      otras.map(c => escapeHtml(c.etiqueta)).join(', ') + '.</span>' : '') +
+    '<br><span style="font-size:11.5px; color:var(--text-dim);">DESPUÉS: ' +
+    escapeHtml(String(gana.despues).slice(0, 150)) + '…</span>' +
+    '<br><span style="font-size:11.5px;">Si no es esa, escribe en el producto la palabra que la identifique (glúteos, busto, cabello, piel…).</span>';
+}
+
+/// Las que casaron y no ganaron, para poder enseñarlo en pantalla: si acierta la
+/// que no era, esto es lo único que se lo diría antes de pagar doce imágenes.
+function categoriasQueCasan(){
+  const f = productoActivo() || {};
+  const texto = [f.nombre, f.descripcion, f.angulo, f.cliente_ideal, f.notas,
+                 (document.getElementById('aProducto')||{}).value || ''].filter(Boolean).join(' ');
+  if(!texto.trim()) return [];
+  return CATEGORIAS_PRODUCTO.filter(c => c.pista.test(texto))
+    .slice().sort((a, b) => (b.fuerza || 0) - (a.fuerza || 0));
 }
 
 /// Lo que se le cuenta a la IA sobre cómo debe ser el antes y el después aquí.
@@ -14787,10 +15009,19 @@ function bindTakeEvents(idx){
   }
   const dialogoBox = document.getElementById('ugc-dialogo-'+idx);
   if(dialogoBox){
-    dialogoBox.addEventListener('blur', ()=>{
+    // SE GUARDA, NO SOLO SE APUNTA EN MEMORIA. Esto escribía en state y no llamaba
+    // a saveSession: cerrabas o recargabas y volvía el texto de la IA — y la toma
+    // se generaba, y se pagaba, con las palabras que tú ya habías corregido. Y solo
+    // se enteraba al perder el foco: si escribías y cerrabas la app, ni eso.
+    let reloj = null;
+    const guardar = ()=>{
+      if(!state.result || !state.result.takes || !state.result.takes[idx]) return;
       state.result.takes[idx].dialogo = dialogoBox.innerText;
-      refrescarAccionesList(idx);
-    });
+      try{ refrescarAccionesList(idx); }catch(e){}
+      try{ saveSession(); }catch(e){}
+    };
+    dialogoBox.addEventListener('blur', guardar);
+    dialogoBox.addEventListener('input', ()=>{ clearTimeout(reloj); reloj = setTimeout(guardar, 800); });
   }
 }
 function refrescarAccionesList(idx){
@@ -16792,6 +17023,11 @@ window.addEventListener('DOMContentLoaded', ()=>{
       document.querySelectorAll(`[data-refchip="${genId}"]`).forEach(inp=>{
         inp.closest('.ref-chip').classList.toggle('checked', inp.checked);
       });
+      // SE APUNTA LO QUE DESMARCASTE A MANO. Sin esto, desmarcar no servía de
+      // nada: la fila se repinta tras CADA generación (refreshAllRefChips) y al
+      // repintarla las chips por defecto se volvían a marcar solas — la imagen
+      // que habías quitado viajaba igual en la siguiente que pagabas.
+      try{ recordarDesmarcadas(genId); }catch(err){}
     }
   });
   // Clic en la miniatura de una referencia: verla en grande, sin togglear su chip.
@@ -16947,6 +17183,13 @@ window.addEventListener('DOMContentLoaded', ()=>{
         toast('Nivel: ' + sel.value + ' — manda en storyboard, imágenes y video');
       };
     } }
+  // La categoría deducida se pinta al arrancar y cada vez que tocas el producto.
+  { const ta = document.getElementById('aProducto');
+    if(ta){
+      let reloj = null;
+      ta.addEventListener('input', ()=>{ clearTimeout(reloj); reloj = setTimeout(()=>{ try{ pintarCategoriaDetectada(); }catch(e){} }, 500); });
+    }
+    try{ pintarCategoriaDetectada(); }catch(e){} }
   { const sel = document.getElementById('aIntensidad');
     if(sel){
       sel.value = nivelIntensidad();
