@@ -5196,7 +5196,15 @@ async function autoResolvePendingTasks(){
         url = await amPollResult(info.amTaskId, {intervalMs:3000, maxMs:9000});
       } else { clearPendingTask(genId); continue; }
       if(statusEl) statusEl.textContent = '';
+      // SE GUARDA Y SE APUNTA, NO SOLO SE PINTA. Este es el mismo agujero que ya
+      // se tapó en «⏳ Seguir esperando», pero aquí no se había tapado: el video
+      // rescatado se veía en pantalla y para la app seguía SIN GENERAR. O sea, la
+      // cola lo volvía a pedir y lo pagabas dos veces, y al recargar desaparecía.
+      // Y encima no entraba en el contador de gasto, aunque ya estuviera pagado.
+      const miCoste = _costeRealUltimo;   // el que dejó ESTA consulta, no el de otra
       renderGenResult(resultEl, url, info.kind, genId);
+      try{ recordarGenerado(genId, url, info.kind, genId); }catch(e){}
+      try{ apuntarGasto(genId, info.kind, genId, opcionesDeCoste(genId, info.kind), miCoste); }catch(e){}
       clearPendingTask(genId);
       refreshAllRefChips();
     }catch(err){
@@ -5821,10 +5829,14 @@ let _costeRealUltimo = null;
 /// Cada generación que se completa queda apuntada con su coste y su fecha.
 /// Si el proveedor nos dijo lo que cobró, se apunta ESO; la estimación solo se
 /// usa cuando no hay dato real (OpenAI, por ejemplo, no lo devuelve).
-function apuntarGasto(genId, kind, etiqueta, opciones){
+/// `costeRealExplicito` es para los caminos que recogen un resultado FUERA de
+/// runGen —el revisor automático y «⏳ Seguir esperando»—, que corren en paralelo
+/// con otras generaciones: ahí no vale leer el global `_costeRealUltimo`, porque
+/// puede ser el de otra cosa que acabe de terminar. Se le pasa el suyo a mano.
+function apuntarGasto(genId, kind, etiqueta, opciones, costeRealExplicito){
   if(!state.gastos) state.gastos = [];
-  const real = _costeRealUltimo;
-  _costeRealUltimo = null;                 // se consume: no vale para la siguiente
+  const real = (costeRealExplicito !== undefined) ? costeRealExplicito : _costeRealUltimo;
+  if(costeRealExplicito === undefined) _costeRealUltimo = null;   // se consume: no vale para la siguiente
   state.gastos.push({
     f: new Date().toISOString(),
     proyecto: state.proyectoAbierto || '(sin guardar)',
@@ -6271,7 +6283,12 @@ async function resumirEspera(genId, kind, prevErr){
     // resultado y lo enseñaba en pantalla, pero no lo apuntaba en state.generados:
     // para la app esa toma seguía sin hacer. La cola la volvía a generar y la
     // pagabas dos veces, y al recargar la página desaparecía.
+    const miCoste = _costeRealUltimo;   // el de ESTA tarea, antes de que lo pise otra
     try{ recordarGenerado(genId, url, kind, genId); }catch(e){}
+    // Y SE APUNTA EL GASTO. Se guardaba en state.generados pero no en el contador:
+    // cada video rescatado por aquí —que son los caros, los de 12 y 15 s— se pagó
+    // y nunca apareció en el desglose. El total enseñaba de menos.
+    try{ apuntarGasto(genId, kind, genId, opcionesDeCoste(genId, kind), miCoste); }catch(e){}
     if(resultEl) renderGenResult(resultEl, url, kind, genId);
     if(window._ultimoFalloGen) delete window._ultimoFalloGen[genId];
     clearPendingTask(genId);
@@ -6785,9 +6802,19 @@ function refDelPlan(id){
 /// orden: la que el usuario haya fijado a mano, la primera imagen del grupo
 /// REFERENCIA del plan, o el avatar/modelo de la ficha. Es la que manda sobre
 /// la cara en todas las escenas.
-function hojaDePersonaje(){
+function hojaDePersonaje(esDelAnimado){
   const A = state.assets || {};
-  const animado = (function(){ try{ return esDelModoAnimado(); }catch(e){ return false; } })();
+  // EL MODO SE PUEDE PASAR A MANO, Y HAY QUE PASARLO. Adivinarlo con
+  // esDelModoAnimado() no vale aquí: esa función mira `_currentGenId`, que lo
+  // pone runGen — y esto se llama ANTES, al armar el prompt y al pintar los chips.
+  // Así que en la primera imagen del proyecto `_currentGenId` estaba vacío,
+  // «animado» salía false, y la función caía hasta `A.character_sheet`: la foto
+  // REAL de otra persona, de otro proyecto, colada de primera referencia con el
+  // candado diciendo «el mismo personaje que la imagen adjunta». Exactamente lo
+  // que el comentario de abajo dice que estaba arreglado, pero por otra puerta.
+  const animado = (esDelAnimado === true) ? true
+                : (esDelAnimado === false) ? false
+                : (function(){ try{ return esDelModoAnimado(); }catch(e){ return false; } })();
   // LA HOJA DEL PLAN VA PRIMERO EN EL MODO ANIMADO. `character_sheet` es la hoja
   // 3×3 de retratos que genera el modo UGC — una FOTO de una persona real, de
   // otro proyecto. Estaba la primera de la lista, así que en cuanto una imagen del
@@ -6825,7 +6852,7 @@ function hojaDePersonajeParaImagen(im){
   const plan = (state.animado.step9 && state.animado.step9.imagenes) ? state.animado.step9.imagenes : [];
   const gen = state.animado.imagenes || {};
   const hojas = plan.filter(x => x && x.grupo === 'REFERENCIA' && gen[x.id]);
-  if(!im || !hojas.length) return hojaDePersonaje();
+  if(!im || !hojas.length) return hojaDePersonaje(true);
 
   // (1) Subir por la cadena hasta encontrar la hoja de la que depende de verdad.
   const vistos = {};
@@ -6855,7 +6882,7 @@ function hojaDePersonajeParaImagen(im){
   const hojaAntes   = hojas.find(x => /inicial|antes|before|sad|triste|chubby|regordet|flaca|plana/i.test(texto(x)));
   if(!esAntes && hojaDespues) return gen[hojaDespues.id];
   if(esAntes && hojaAntes)    return gen[hojaAntes.id];
-  return hojaDePersonaje();
+  return hojaDePersonaje(true);
 }
 
 /* ── DE QUIÉN ES ESTA IMAGEN ────────────────────────────────────────────────
@@ -7330,10 +7357,16 @@ function armarPromptImagenPlan(im){
       if(t.indexOf('WARDROBE —') < 0) t += '\n' + REGLA_VESTUARIO_CONTINUIDAD;
     }
     if(deProducto.length) t = forzarProducto(t, deProducto.length);
-    // Dos personas en fases distintas: cada una con SU candado, por su sitio.
-    else if(tieneCuerposMixtos(im)) t = forzarCuerposMixtos(t, im.cuerpos);
+    // EL CUERPO Y LA ROPA VAN AUNQUE SALGA EL PRODUCTO. Antes esto era un
+    // else-if: en cuanto la imagen llevaba la foto del envase se saltaba el
+    // candado del cuerpo Y el de la ropa. Y justo esa es la imagen que vende —
+    // ella sosteniendo el producto —, así que el ANTES podía salir con curvas y
+    // el DESPUÉS sin la regla de nunca gorda. No hace falta el else: los dos
+    // candados ya se guardan solos con pareceFemenino(), así que una foto de solo
+    // el envase no recibe nada.
+    if(tieneCuerposMixtos(im)) t = forzarCuerposMixtos(t, im.cuerpos);
     else t = forzarCuerpoFemenino(t, im.fase);
-    if(!deProducto.length) t = forzarAtrevimiento(t, im.fase);   // la ropa, al nivel que elegiste
+    t = forzarAtrevimiento(t, im.fase);   // la ropa, al nivel que elegiste
     return {text:t, refs, deProducto, cuantasIdentidad};
   }
   // LA HOJA DE PERSONAJE MANDA Y VA DE PRIMERA. Si cada escena solo se apoya en
@@ -7374,12 +7407,13 @@ function armarPromptImagenPlan(im){
     if(text.indexOf('WARDROBE —') < 0) text += '\n' + REGLA_VESTUARIO_CONTINUIDAD;
   }
   if(im.necesita_foto_producto) text = forzarProducto(text, deProducto.length);
+  // Igual que arriba: el cuerpo y la ropa NO se saltan porque salga el producto.
   // Dos personas en fases distintas en el mismo cuadro: candado doble.
-  else if(tieneCuerposMixtos(im)) text = forzarCuerposMixtos(text, im.cuerpos);
-  // El cuerpo femenino se fuerza en toda imagen que NO sea solo el producto: el
+  if(tieneCuerposMixtos(im)) text = forzarCuerposMixtos(text, im.cuerpos);
+  // El cuerpo femenino se fuerza en toda imagen donde haya una persona: el
   // después sexy sin músculos en brazos/hombros/espalda, salga bien siempre.
   else text = forzarCuerpoFemenino(text, im.fase);
-  if(!im.necesita_foto_producto) text = forzarAtrevimiento(text, im.fase);
+  text = forzarAtrevimiento(text, im.fase);
   return {text, refs, deProducto, cuantasIdentidad};
 }
 
@@ -9228,6 +9262,15 @@ async function generarVideoEnCadena(prompt, refUrls, aspecto, setStatus, duracio
     const p = pasos[i];
     const arrancoEn = Date.now();
     try{
+      // WAVESPEED SOLO SE LLEVA DOS REFERENCIAS: el frame de inicio y el de fin.
+      // Si venías de APImart con cuatro marcadas, las otras dos NO viajan — y el
+      // prompt sigue diciendo «la 3ª imagen adjunta es Camila», señalando algo que
+      // nunca llegó. Se dice, en vez de pagar el video con la cara inventada.
+      if(p.prov === 'wavespeed' && refs.length > 2 && setStatus){
+        setStatus(' ⚠️ ' + nombreBonito(p) + ' solo acepta 2 referencias: de las ' + refs.length +
+                  ' marcadas viajan el primer y el último frame. Si la cara sale cambiada, es por esto — genera esta toma con 🧩 APImart.');
+        await new Promise(r=>setTimeout(r, 1800));
+      }
       if(setStatus) setStatus(' generando video con ' + nombreBonito(p) + (i>0 ? ' (el anterior falló)' : '') + '... puede tardar varios minutos');
       let url;
       if(p.prov === 'apimart')       url = await amGenerateVideoModelo(prompt, refs, p.modelo, aspecto, duracion);
@@ -9761,7 +9804,14 @@ function forzarAtrevimiento(prompt, fase){
   const regla = REGLA_ATREVIMIENTO[nivel];
   if(!regla) return prompt;
   let p = String(prompt == null ? '' : prompt);
-  if(p.indexOf('WARDROBE LOCK') >= 0) return p;
+  // SE BUSCA EL CANDADO DE VERDAD, NO LAS PALABRAS SUELTAS. Aquí había un fallo
+  // que se comía el nivel de atrevimiento en TODA imagen del plan con una cara
+  // adjunta: la regla de continuidad de vestuario dice, DENTRO de su propio
+  // texto, «Unless a WARDROBE LOCK below says otherwise» y «where a WARDROBE LOCK
+  // is present». La regla se nombraba a sí misma, este indexOf la encontraba, y
+  // se salía sin poner nada — ni el nivel de ropa ni el límite duro. El candado
+  // de verdad siempre lleva el guion largo detrás: «WARDROBE LOCK — MAXIMUM».
+  if(p.indexOf('WARDROBE LOCK — ') >= 0) return p;
   // Escena mixta: la ropa ya la repartió el candado doble, una por persona.
   // Pegar aquí una regla para toda la imagen vestiría también a la del antes.
   if(p.indexOf('TWO-BODY LOCK') >= 0) return p;
@@ -10202,12 +10252,54 @@ async function arreglarPromptToma(n, escena){
 /// video. Lo ya generado se salta (no se repite ni se cobra). Si algo falla, se
 /// detiene ahí y lo dice, sin perder lo hecho.
 let _crearTodoCorriendo = false;
-async function crearTodoDeUna(escenas){
+/// `opciones.sinPreguntar` — solo lo pone la cadena entera, que ya cobró el OK.
+/// `opciones.sigue` — la cadena entera pasa aquí su botón de «✋ Parar».
+async function crearTodoDeUna(escenas, opciones){
   if(_crearTodoCorriendo) return;
-  _crearTodoCorriendo = true;
+  const opts = opciones || {};
   const st = document.getElementById('crearTodoStatus');
   const btn = document.getElementById('btnCrearTodo');
   const decir = t => { if(st) st.textContent = t; };
+
+  // EL PRECIO, ANTES DE GASTARLO. Este es el botón que MÁS dinero se lleva de
+  // toda la app —todas las imágenes que falten, todas las voces y todos los
+  // videos— y era el único que no enseñaba ni una cifra. Encima le pasaba
+  // `true` a generarTodoElPlan, que apagaba el aviso de precio de las imágenes,
+  // con un comentario que decía «el precio ya se aprobó al arrancar la cola»:
+  // eso solo es verdad cuando lo llama la cadena entera, no cuando le das tú.
+  const tomasPrev = escenas || (state.animado && state.animado.tomas) || [];
+  if(!opts.sinPreguntar){
+    const gen = state.generados || {};
+    const imgs = ((state.animado||{}).step9 || {}).imagenes || [];
+    const faltanImgs = imgs.filter(im => !(((state.animado||{}).imagenes)||{})[im.id]).length;
+    let voces = 0, videos = 0, coste = faltanImgs * precios().imagen;
+    tomasPrev.forEach((t,i)=>{
+      const n = t.numero || (i+1);
+      if(!tomaHablada(n) && !(gen['voz-'+n] && gen['voz-'+n].url)){
+        voces++; coste += costeDe('audio', opcionesDeCoste('voz-'+n, 'audio'));
+      }
+      if(!(gen['vid-'+n] && gen['vid-'+n].url)){
+        videos++; coste += costeDe('video', opcionesDeCoste('vid-'+n, 'video'));
+      }
+    });
+    if(!faltanImgs && !voces && !videos){ toast('Ya está todo generado en este proyecto'); return; }
+    const trozos = [];
+    if(faltanImgs) trozos.push('<b>' + faltanImgs + '</b> ' + (faltanImgs===1?'imagen del plan':'imágenes del plan'));
+    if(voces)      trozos.push('<b>' + voces + '</b> ' + (voces===1?'locución':'locuciones'));
+    if(videos)     trozos.push('<b>' + videos + '</b> ' + (videos===1?'video':'videos'));
+    // El botón se apaga ANTES del modal: si no, dos clics seguidos abren dos
+    // avisos y arrancan dos veces.
+    if(btn) btn.disabled = true;
+    const seguir = await mostrarAvisoModal('🚀 Crear todo lo que falta',
+      '<div class="es-explain" style="text-align:left;">Se van a generar ' + trozos.join(' · ') + '.<br><br>' +
+      'Coste aproximado: <b>' + enLasDosMonedas(coste) + '</b> con los precios que tienes puestos. ' +
+      'Los videos se ajustan a lo que dure cada locución, así que el número final puede subir un poco.<br><br>' +
+      'Lo ya generado no se repite ni se vuelve a cobrar. Si algo falla se para ahí y no pierdes lo hecho.</div>',
+      [{id:'ya', texto:'Generarlo', principal:true}, {id:'no', texto:'Ahora no'}]);
+    if(seguir !== 'ya'){ if(btn) btn.disabled = false; return; }
+  }
+
+  _crearTodoCorriendo = true;
   if(btn) btn.disabled = true;
   try{
     // Aviso, no freno: si no se auditó, se dice y se sigue. Frenar aquí sería peor
@@ -10224,8 +10316,15 @@ async function crearTodoDeUna(escenas){
     }
     // 2) Voz de cada toma, luego su video. En orden.
     const tomas = escenas || state.animado.tomas || [];
-    let vozHechas = 0, vidHechos = 0, fallo = null;
+    // EL «✋ PARAR» DE LA CADENA TIENE QUE LLEGAR HASTA AQUÍ. Antes no llegaba:
+    // pulsabas Parar mientras generaba los videos, salía el toast «se para al
+    // acabar este paso» — y este bucle seguía pagando TODOS los videos que
+    // quedaban, porque nadie le había pasado el interruptor. Al final la caja
+    // decía «✋ Parado. Lo hecho se queda hecho» con todo ya cobrado.
+    const sigueVivo = (typeof opts.sigue === 'function') ? opts.sigue : (()=>true);
+    let vozHechas = 0, vidHechos = 0, fallo = null, parado = false;
     for(let i=0; i<tomas.length; i++){
+      if(!sigueVivo()){ parado = true; break; }
       const n = tomas[i].numero || (i+1);
       const gen = state.generados || {};
       // Voz
@@ -10241,7 +10340,9 @@ async function crearTodoDeUna(escenas){
           vozHechas++;
         }
       }
-      // Video
+      // Video — se vuelve a mirar el interruptor: la voz de arriba pudo tardar
+      // un minuto largo, y en ese rato le pudo dar a Parar.
+      if(!sigueVivo()){ parado = true; break; }
       if(!gen['vid-'+n] || !gen['vid-'+n].url){
         const bVid = document.querySelector(`[data-gen="vid-${n}"]`);
         if(bVid){
@@ -10252,7 +10353,9 @@ async function crearTodoDeUna(escenas){
         }
       }
     }
-    if(fallo){
+    if(parado){
+      decir(`✋ Parado donde dijiste. ${vozHechas} voces y ${vidHechos} videos nuevos, y no se pagó nada más. Dale otra vez y sigue donde lo dejó.`);
+    }else if(fallo){
       decir(`⚠️ Me detuve en ${fallo}. Lo demás quedó hecho: revisa esa toma, arréglala y vuelve a darle a Crear TODO — lo ya hecho no se repite.`);
     }else{
       decir(`✅ Listo: todo generado. ${vozHechas} voces y ${vidHechos} videos nuevos. Ya puedes montar el video final.`);
@@ -10339,7 +10442,7 @@ function hojaParaLaToma(n, e){
     titulo: (e && e.descripcion_es) || '',
     para_que: ''
   };
-  try{ return hojaDePersonajeParaImagen(falso); }catch(err){ return hojaDePersonaje(); }
+  try{ return hojaDePersonajeParaImagen(falso); }catch(err){ return hojaDePersonaje(true); }
 }
 
 /* ============================================================
@@ -11220,6 +11323,13 @@ function aplicarInstantanea(foto){
     if(foto[k] !== undefined) state[k] = foto[k];
     else if(CLAVES_QUE_SE_VACIAN.indexOf(k) >= 0) state[k] = {};
   });
+  // LAS TAREAS EN VUELO SON DEL PROYECTO QUE LAS LANZÓ, DE NADIE MÁS. No están en
+  // CLAVES_TRABAJO —y está bien, no son datos del proyecto— pero tampoco se
+  // limpiaban al abrir otro: el revisor automático corre cada 25 s, se apoya solo
+  // en el id («vid-3»), y las tomas se numeran 1..N en TODOS los proyectos. Así
+  // que el video pendiente de la toma 3 del proyecto A aparecía minutos después
+  // dentro de la tarjeta de la toma 3 del proyecto B, y se guardaba ahí.
+  state.pendingTasks = {};
   if(!state.generados) state.generados = {};
   if(!state.assets) state.assets = {};
 }
@@ -11653,7 +11763,21 @@ function firmaDelTrabajo(){
     JSON.stringify(a.step5 || '').length,
     JSON.stringify(a.step9 || '').length,
     a.elegido ? 1 : 0,
-    a.productoEstilo ? 1 : 0
+    a.productoEstilo ? 1 : 0,
+    // LOS CANDADOS DE CADA TOMA CUENTAN COMO TRABAJO. Se guardan en el proyecto
+    // (están en CLAVES_TRABAJO) pero no estaban en esta firma, así que cambiar
+    // solo el modo de voz, quién habla, el género de la voz, los turnos, la fase
+    // o los segundos a mano NO despertaba al autoguardado: al reabrir el proyecto
+    // volvían los valores viejos y el video se generaba —y se pagaba— con el modo
+    // equivocado. Van enteros, no por longitud: son pequeños y así no colisionan
+    // dos configuraciones distintas que ocupen lo mismo.
+    JSON.stringify(state.modoHabla || {}),
+    JSON.stringify(state.quienHabla || {}),
+    JSON.stringify(state.vozGenero || {}),
+    JSON.stringify(state.fases || {}),
+    JSON.stringify(state.turnosDialogo || {}).length,
+    JSON.stringify(a.durToma || {}),
+    JSON.stringify(a.atrevimiento || '') + JSON.stringify(a.intensidad || '') + JSON.stringify(a.estilo || '')
   ].join('|');
 }
 
@@ -15971,6 +16095,18 @@ async function auditarStoryboard(){
 ============================================================ */
 let _cadenaCorriendo = false;
 
+/// ¿HAY PLAN, Y ES DEL STORYBOARD DE AHORA? Tener un step9 no basta: el paso 7
+/// («auditar como director») reescribe y RENUMERA las escenas y deja puesto
+/// `planDesactualizado`. La cadena solo miraba que el plan existiera, así que
+/// después de auditar se saltaba el paso 9 y pagaba las imágenes de un plan
+/// caducado — escenas que ya no son esas y con otra numeración. El aviso que lo
+/// explicaba se pintaba en el DOM y desaparecía al recargar; esto no.
+function hayPlanUtil(){
+  const a = state.animado || {};
+  if(a.planDesactualizado) return false;
+  return !!(a.step9 && (a.step9.imagenes||[]).length);
+}
+
 async function hacerElAnuncioEntero(){
   if(_cadenaCorriendo){ toast('Ya hay una en marcha'); return; }
   if(!requireApiKey()) return;
@@ -15981,7 +16117,7 @@ async function hacerElAnuncioEntero(){
   // nada, que es lo que la hace útil cuando algo falla a mitad.
   const hayStory = !!(a.step5 && (a.step5.escenas||[]).length) ||
                    !!(a.step7 && (a.step7.storyboard_definitivo||[]).length);
-  const hayPlan  = !!(a.step9 && (a.step9.imagenes||[]).length);
+  const hayPlan  = hayPlanUtil();
   let escenas = 10;
   try{ if(hayStory) escenas = mejorStoryboard().length || 10; }catch(e){}
   const imgsFaltan = hayPlan
@@ -16019,23 +16155,43 @@ async function hacerElAnuncioEntero(){
     if(b) b.onclick = ()=>{ _cadenaCorriendo = false; toast('Se para al acabar este paso'); };
   };
   const sigue = ()=> _cadenaCorriendo;
+  // CADA PASO TIENE QUE HABER SALIDO BIEN ANTES DE PAGAR EL SIGUIENTE. Los pasos
+  // se tragan sus propios errores (animadoError pinta la caja roja y no lanza
+  // nada), así que la cadena seguía como si tal cosa: si el paso 9 fallaba, no
+  // había plan, generarTodoElPlan salía por la puerta de atrás sin generar ni una
+  // imagen, y aun así se armaban las tomas y se pagaban TODOS los videos sin una
+  // sola referencia. Y terminaba diciendo «✅ Listo».
+  const exigir = (cond, queFalta)=>{ if(!cond) throw new Error(queFalta); };
+  let terminoBien = false;
   try{
-    if(sigue() && !hayStory){ decir('Escribiendo el storyboard...'); await animadoPaso5(); }
+    if(sigue() && !hayStory){
+      decir('Escribiendo el storyboard...'); await animadoPaso5();
+      exigir((mejorStoryboard()||[]).length, 'El paso 5 no dejó ningún storyboard (mira la caja roja de arriba). No sigo: sin escenas, los videos saldrían de la nada.');
+    }
     if(sigue()){ decir('Auditando el storyboard: fases, quién lleva el antes y quién el después, el producto y la ropa...'); await auditarStoryboard(); }
-    if(sigue() && !(state.animado.step9 && (state.animado.step9.imagenes||[]).length)){
+    if(sigue() && !hayPlanUtil()){
       decir('Calculando el plan de imágenes...'); await animadoPaso9();
+      exigir(hayPlanUtil(), 'El paso 9 no dejó ningún plan de imágenes (mira la caja roja de arriba). No sigo: sin plan no hay referencias, y los videos saldrían con caras inventadas.');
     }
     if(sigue()){ decir('Auditando el plan: que cada imagen cuelgue de la cara correcta...'); await auditarPlanImagenes(); }
-    if(sigue()){ decir('Generando las imágenes que faltan. Esto es lo que más tarda.'); await generarTodoElPlan(true); }
+    if(sigue()){
+      decir('Generando las imágenes que faltan. Esto es lo que más tarda.'); await generarTodoElPlan(true);
+      const plan = ((state.animado.step9||{}).imagenes)||[];
+      const hechas = plan.filter(im => (state.animado.imagenes||{})[im.id]).length;
+      exigir(hechas > 0, 'No se generó ninguna imagen del plan. No sigo a los videos: se pagarían todos sin una sola referencia.');
+    }
     if(sigue()){ decir('Armando las tomas en orden...'); armarTomasFinales(); }
     if(sigue()){ decir('Auditando las tomas: quién habla, en qué orden y si el texto cabe...'); await auditarTomas(); }
     if(sigue()){ decir('Generando las voces y los videos. Puedes irte: te aviso al terminar.');
-                 await crearTodoDeUna(state.animado.tomas || []); }
+                 // El precio ya se aprobó arriba, y el «✋ Parar» viaja hacia dentro.
+                 await crearTodoDeUna(state.animado.tomas || [], {sinPreguntar:true, sigue: sigue}); }
+    terminoBien = _cadenaCorriendo;
     if(caja){
-      caja.innerHTML = _cadenaCorriendo
+      caja.innerHTML = terminoBien
         ? '<div class="es-explain">✅ <b>Listo.</b> Ya puedes montar el video final abajo.</div>'
         : '<div class="nota-desfase">✋ Parado. Lo hecho se queda hecho: dale otra vez y sigue donde lo dejó.</div>';
     }
+    if(!terminoBien) return;
     try{ sonarYunque(); }catch(e){}
     if(document.hidden) avisarEnElTelefono('El anuncio está listo', 'Se generaron las imágenes, las voces y los videos.');
   }catch(err){
