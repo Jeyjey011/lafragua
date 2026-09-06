@@ -4612,11 +4612,26 @@ async function amGenerateVideo(prompt, refUrls){
   return await amPollResult(taskId, {intervalMs:5000, maxMs:480000});
 }
 // Gemini Omni Flash genera voz+labios+acciones en un solo paso — el diálogo va citado dentro del prompt, no por TTS aparte.
+/* SE RECORTA EL DIÁLOGO, NO EL FINAL DEL PROMPT.
+   Esto cortaba a pelo por caracteres al final (`p.slice(0,900)`), y lo último que
+   se escribe es justo lo que NO puede faltar: las acciones del guion y el encuadre
+   selfie. Con un diálogo largo, la toma salía pagada y sin ninguna acción, sin el
+   encuadre, y encima con la frase cortada a mitad. Ahora el armazón se respeta
+   siempre y lo que se recorta —si hay que recortar— es el texto hablado, avisando. */
+const TOPE_PROMPT_AM = 900;
 function buildAmDialoguePrompt(dialogText, accionesPrompt){
-  let p = 'The person shown in the reference image is talking directly to the camera, in natural Spanish with a Colombian (Bogotá-area) accent, real human voice, perfectly lip-synced, no captions or on-screen text of any kind. They say exactly: "'+(dialogText||'').replace(/"/g,"'")+'".';
-  if(accionesPrompt) p += ' ' + accionesPrompt;
-  p += ' Static handheld selfie-style framing, photorealistic, natural skin and lighting, single continuous take.';
-  return p.length>900 ? p.slice(0,900) : p;
+  const cola = (accionesPrompt ? ' ' + accionesPrompt : '') +
+    ' Static handheld selfie-style framing, photorealistic, natural skin and lighting, single continuous take.';
+  const cabeza = 'The person shown in the reference image is talking directly to the camera, in natural Spanish with a Colombian (Bogotá-area) accent, real human voice, perfectly lip-synced, no captions or on-screen text of any kind. They say exactly: "';
+  const cierre = '".';
+  let dicho = String(dialogText || '').replace(/"/g, "'");
+  const hueco = TOPE_PROMPT_AM - cabeza.length - cierre.length - cola.length;
+  if(hueco > 40 && dicho.length > hueco){
+    const corte = dicho.lastIndexOf(' ', hueco - 1);
+    dicho = dicho.slice(0, corte > 20 ? corte : hueco - 1).replace(/[\s,;:]+$/, '') + '.';
+    try{ toast('⚠️ El diálogo de esta toma no cabe entero en el modelo y se recortó. Pártelo en dos tomas si quieres que se diga todo.', 9000); }catch(e){}
+  }
+  return cabeza + dicho + cierre + cola;
 }
 
 /* ============================================================
@@ -7199,12 +7214,20 @@ function traducirIdsDeRef(prompt, refs){
 /// contrarias en el mismo prompt y gana la que el modelo lea mejor, o sea, una
 /// lotería. Ahora esta regla habla solo de NO CRUZAR la ropa entre personajes y
 /// cede expresamente ante el candado de vestuario cuando lo hay.
+/* «BELOW» ERA UNA TRAMPA: DEPENDÍA DEL ORDEN.
+   Esta regla decía «Unless a WARDROBE LOCK **below** says otherwise…». En las
+   imágenes se pega ANTES del candado de atrevimiento, así que el orden cuadraba.
+   Pero en el VIDEO es al revés: el candado ya está puesto y esta regla se añade
+   DESPUÉS — así que la última orden que leía el modelo era «déjale la ropa de la
+   imagen de referencia», y el nivel que elegiste (sexy / atrevido / máximo) se
+   anulaba solo. Ahora no habla de posiciones: vale esté donde esté. */
 const REGLA_VESTUARIO_CONTINUIDAD =
   'WARDROBE — WHO WEARS WHAT: each character wears their own clothes and nobody else\'s. Never put one ' +
   'character\'s garments, colours or style on another, and never merge two characters\' outfits into one. ' +
-  'Unless a WARDROBE LOCK below says otherwise, keep each character in the outfit shown in their own ' +
-  'reference image; where a WARDROBE LOCK is present, that lock decides the outfit and this rule only ' +
-  'keeps the characters from swapping looks.';
+  'If a WARDROBE LOCK appears ANYWHERE in this prompt — before or after this paragraph — that lock is what ' +
+  'decides the outfit and it overrides this paragraph; this rule then only keeps the characters from ' +
+  'swapping looks with each other. Only when there is NO WARDROBE LOCK anywhere, keep each character in ' +
+  'the outfit shown in their own reference image.';
 
 /// EL CANDADO TIENE QUE HABLAR DEL ORDEN REAL DE LAS IMÁGENES ADJUNTAS.
 /// Dice «la 1ª imagen adjunta es Camila, la 2ª es Bruno» — y eso solo es verdad
@@ -8012,7 +8035,11 @@ function renderAdsPrompts(d){
     <div class="card" data-ad-card="${i}">
       <h4><span class="title-txt">🖼️ ${p.numero||i+1}. ${escapeHtml(p.formato||'')} <span class="mono" style="font-size:11px; color:var(--text-dim);">${escapeHtml(p.categoria||'')}</span></span></h4>
       ${p.honesty_hook?`<div class="es-explain"><b>Ancla de credibilidad:</b> ${escapeHtml(p.honesty_hook)}</div>`:''}
-      ${p.necesita_producto?`<div class="warn-row">📦 Este formato lleva el producto — marca su miniatura para que use tu foto real.</div>`:`<div class="es-explain" style="color:var(--ok);">Sin producto: este formato no necesita ninguna referencia adjunta.</div>`}
+      <!-- DECÍA QUE NO IBA NINGUNA REFERENCIA Y SÍ IBA: la foto de la modelo se
+           marca sola en estos formatos (autoKeys ['modelo']) y viaja al proveedor.
+           No se le quita la marca —que la cara salga es lo normal aquí— pero el
+           texto ya no miente: lo que no lleva es el PRODUCTO. -->
+      ${p.necesita_producto?`<div class="warn-row">📦 Este formato lleva el producto — marca su miniatura para que use tu foto real.</div>`:`<div class="es-explain" style="color:var(--ok);">Sin producto: aquí no sale el envase. Sí va marcada la foto de tu modelo — desmárcala abajo si quieres el creativo sin cara.</div>`}
       ${bloquesDobleFormato('ad-'+i, p, p.necesita_producto?['producto','producto_contenido','modelo','producto_extra']:['modelo'], etiquetasDobles(p.numero||i+1, p.formato))}
     </div>`).join('');
   if(d.recordatorio) html += `<div class="aviso-box">${escapeHtml(d.recordatorio)}</div>`;
@@ -11569,14 +11596,26 @@ function avisarEnElTelefono(titulo, cuerpo){
   if(enIOS) ios('avisar', {titulo:titulo, cuerpo:cuerpo}).catch(()=>{});
 }
 
-const LLAVES_SECRETAS = ['fragua_api_key','fragua_ws_key','fragua_am_key','fragua_oa_key','fragua_el_key'];
+/* EL TOKEN DEL CEREBRO TAMBIÉN ES UNA LLAVE, Y NO ESTABA EN LA LISTA.
+   Elegías «Sin las llaves», la app decía «Archivo bajado (sin llaves)» — y el .json
+   se llevaba dentro `fragua_cerebro_token`, que es tu token de GitHub con permiso
+   de escritura sobre tu repositorio. No es un ajuste: con él se puede escribir en
+   tu cuenta. Y va más allá: cualquier llave nueva que se añada mañana se colaría
+   igual por no estar en la lista, así que además de nombrarlas hay una red por
+   patrón para las que acaben en _key, _token, _secret o _pass. */
+const LLAVES_SECRETAS = ['fragua_api_key','fragua_ws_key','fragua_am_key','fragua_oa_key','fragua_el_key','fragua_cerebro_token'];
+function esClaveSecreta(k){
+  const s = String(k == null ? '' : k);
+  if(LLAVES_SECRETAS.indexOf(s) > -1) return true;
+  return /(_key|_token|_secret|_pass|_password)$/i.test(s);
+}
 
 function recogerTodo(conLlaves){
   const datos = {};
   for(let i=0; i<localStorage.length; i++){
     const k = localStorage.key(i);
     if(!k || k.indexOf('fragua_') !== 0) continue;
-    if(!conLlaves && LLAVES_SECRETAS.indexOf(k) > -1) continue;
+    if(!conLlaves && esClaveSecreta(k)) continue;
     datos[k] = localStorage.getItem(k);
   }
   return { _app:'LA FRAGUA', _version:2, _fecha:new Date().toISOString(),
@@ -11637,6 +11676,35 @@ function importarTodo(){
   inp.click();
 }
 
+/* TRAER UN ARCHIVO NO PUEDE BORRARTE LO QUE NO VIENE DENTRO.
+   El aviso promete «lo que ya tengas con el mismo nombre se reemplaza, lo demás se
+   queda» — y el código escribía clave por clave de localStorage. Pero TODOS tus
+   proyectos viven en UNA sola clave (`fragua_proyectos`), igual que todo el
+   historial de gasto y todos los productos. Así que traer una copia con dos
+   proyectos borraba los otros veinte, y el gasto entero, justo después de haber
+   prometido lo contrario en pantalla.
+   Ahora esas tres se funden: lo que viene con el mismo nombre reemplaza, y lo tuyo
+   que no venía se queda. El resto de claves —los ajustes— sí se reemplazan. */
+const CLAVES_DE_LISTA = {
+  fragua_proyectos: 'nombre',
+  fragua_productos: 'nombre',
+  fragua_gastos:    null,      // sin clave: se juntan y se quitan los repetidos
+};
+function fundirAlTraer(k, valorEntrante){
+  if(!(k in CLAVES_DE_LISTA)) return valorEntrante;
+  let mios = [], suyos = [];
+  try{ mios  = JSON.parse(localStorage.getItem(k) || '[]'); }catch(e){ mios = []; }
+  try{ suyos = JSON.parse(valorEntrante || '[]'); }catch(e){ return valorEntrante; }
+  if(!Array.isArray(mios) || !Array.isArray(suyos)) return valorEntrante;
+  const porQue = CLAVES_DE_LISTA[k];
+  const idDe = (x)=> porQue ? String((x && x[porQue]) || '')
+                            : JSON.stringify([x && x.f, x && x.genId, x && x.usd]);
+  const mapa = new Map();
+  mios.forEach(x => mapa.set(idDe(x), x));
+  suyos.forEach(x => mapa.set(idDe(x), x));   // lo que viene manda si coincide
+  return JSON.stringify(Array.from(mapa.values()));
+}
+
 async function procesarPaqueteTraido(crudo){
   let paquete;
   try{ paquete = JSON.parse(crudo); }
@@ -11654,7 +11722,9 @@ async function procesarPaqueteTraido(crudo){
   );
   if(eleccion !== 'ok') return;
   let fallos = 0;
-  claves.forEach(k=>{ try{ localStorage.setItem(k, paquete.datos[k]); }catch(e){ fallos++; } });
+  claves.forEach(k=>{
+    try{ localStorage.setItem(k, fundirAlTraer(k, paquete.datos[k])); }catch(e){ fallos++; }
+  });
   if(fallos){ toast('No cupo todo — ' + fallos + ' apartados se quedaron fuera'); return; }
   toast('Traído ✓ — recargando');
   setTimeout(()=>location.reload(), 700);
@@ -15053,10 +15123,14 @@ async function resyncTake(idx){
   const t = state.result.takes[idx];
   setLoadingReal(true, 'Re-sincronizando...', 'Toma '+(t.numero||idx+1)+' — ajustando acciones al nuevo texto.');
   try{
-    const userContent = `Tengo esta toma de un guion AvatarHype (FORMA "takes", un solo elemento de "takes"). El usuario editó el diálogo a mano y algunas acciones quedaron con un "trigger" que ya no existe en el texto. Ajusta SOLO los triggers y descripciones de acciones para que apunten correctamente al diálogo nuevo, sin inventar diálogo nuevo, sin cambiar voz/acento/cámara. Reconstruye "prompt_final_en" y "palabras_intensificables". Devuelve SOLO el objeto JSON de esta única toma (mismas claves: numero, resumen_es, dialogo, acciones, voz, acento, prompt_final_en, palabras_intensificables).\n\nTOMA ACTUAL:\n${JSON.stringify(t)}`;
+    const userContent = `Tengo esta toma de un guion AvatarHype (FORMA "takes", un solo elemento de "takes"). El usuario editó el diálogo a mano y algunas acciones quedaron con un "trigger" que ya no existe en el texto. Ajusta SOLO los triggers y descripciones de acciones para que apunten correctamente al diálogo nuevo, sin inventar diálogo nuevo, sin cambiar voz/acento/cámara. Reconstruye "prompt_final_en" y "palabras_intensificables". Devuelve SOLO el objeto JSON de esta única toma, con TODAS sus claves: numero, resumen_es, dialogo, acciones, voz, acento, camara_es, interlocutor_es, prompt_final_en, palabras_intensificables. Si una no cambia, devuélvela igual — no la dejes fuera.\n\nTOMA ACTUAL:\n${JSON.stringify(t)}`;
     const raw = await callClaude(SYSTEM_PROMPT, userContent, 64000);
     const fixed = parseJsonLoose(raw);
-    state.result.takes[idx] = fixed;
+    // SE FUNDE, NO SE REEMPLAZA. Esto machacaba la toma entera con lo que volviera,
+    // y el pedido de arriba no nombraba «camara_es» ni «interlocutor_es»: al
+    // re-sincronizar desaparecía el segundo interlocutor del Dualcast y el
+    // movimiento de cámara volvía a «Cámara fija». Lo que no vuelva se queda.
+    state.result.takes[idx] = Object.assign({}, t, fixed || {});
     saveSession();
     document.getElementById('take-'+idx).outerHTML = renderTakeCard(fixed, idx);
     bindTakeEvents(idx);
@@ -17149,6 +17223,15 @@ window.addEventListener('DOMContentLoaded', ()=>{
   if(bSon){ bSon.textContent = _sonidoOn ? '🔊' : '🔇'; bSon.onclick = alternarSonido; }
   // Cambiar el estilo en el desplegable lo fija YA, sin esperar al paso 1.
   const selEstilo = document.getElementById('aEstilo');
+  // Y EL CAMINO DE VUELTA, QUE FALTABA. Solo se enganchaba el onchange: al recargar,
+  // el desplegable volvía siempre a la primera opción (Pixar) aunque el proyecto
+  // fuera claymation, animalnovela o mito. Los prompts seguían saliendo bien porque
+  // usan state, pero en cuanto volvías a darle al paso 1 se leía el desplegable y
+  // el proyecto entero se pasaba a Pixar — y se generaba, y se pagaba, así.
+  if(selEstilo){ try{ const e = estiloActual(); if(e) selEstilo.value = e; }catch(_e){} }
+  // Y la etiqueta del botón de guardar, que tras un F5 seguía diciendo «Guardar como
+  // proyecto nuevo» con un proyecto abierto.
+  try{ pintarProyectoAbierto(); }catch(_e){}
   if(selEstilo) selEstilo.onchange = ()=>{
     state.animado.estilo = selEstilo.value;
     state.animado.estiloAMano = true;   // elegido por ti: nada lo cambia solo
