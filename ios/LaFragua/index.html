@@ -4394,6 +4394,39 @@ function copyText(txt, label){
   navigator.clipboard.writeText(txt).then(()=>toast(label ? label+' copiado' : 'Copiado ✓'));
 }
 
+/* UNA FOTO TIENE QUE PARECER UNA FOTO ────────────────────────────────────────
+   Los cuatro campos foto_* de la ficha esperan una URL, pero la etiqueta del de
+   contenido dice «la pastilla, el polvo, la textura», que se lee como una
+   pregunta de QUÉ es. Alguien contestó a la pregunta: escribió «Polvo, color
+   rosado, que se disuelve en agua». La app lo dio por bueno, lo guardó, y a
+   partir de ahí ese texto era una URL de imagen para todo el programa: se pintó
+   como <img> debajo de cada toma —un cuadro roto por toma— y quedó a un clic de
+   marcarse como referencia de un vídeo de pago.
+   `escapeHtml` no sirve para esto: escapa HTML, no comprueba que algo sea una
+   dirección. Esta es la comprobación que faltaba, y se usa en todos los sitios
+   donde un campo de la ficha se convierte en imagen. */
+function pareceUrlDeImagen(v){
+  return /^(https?:|data:|blob:)/i.test(String(v == null ? '' : v).trim());
+}
+/* Los campos de foto de la ficha que SÍ se pueden enseñar, y los que no.
+   Los que no, no se borran ni se esconden: se devuelven aparte para poder
+   avisar de que están mal puestos en vez de tragárselos en silencio. */
+function fotosDeLaFicha(f, campos){
+  const buenas = [], malas = [];
+  (campos || []).forEach(([campo, nombre])=>{
+    const v = String((f && f[campo]) || '').trim();
+    if(!v) return;
+    (pareceUrlDeImagen(v) ? buenas : malas).push({campo, nombre, valor: v});
+  });
+  return {buenas, malas};
+}
+function avisoFotosMalas(malas){
+  if(!malas || !malas.length) return '';
+  const cuales = malas.map(m=>'«' + escapeHtml(m.nombre) + '»').join(', ');
+  return '<span class="toolkit-note" style="color:var(--warn,#e0a03a);">⚠️ La ficha tiene texto donde debería ir la dirección de una foto (' +
+         cuales + '). Esa foto no se puede usar como referencia — arréglalo en la ficha del producto.</span>';
+}
+
 /* NINGÚN BOTÓN SE QUEDA MUDO ─────────────────────────────────────────────────
    Si algo reventaba ANTES de empezar la generación —al armar el prompt, al leer
    un campo que no está, al tocar un dato guardado con otra forma— el clic no
@@ -11139,6 +11172,20 @@ function pintarFichaProducto(p){
 function guardarFichaProducto(){
   const ficha = leerFichaProducto();
   if(!ficha.nombre){ toast('Ponle nombre al producto para guardarlo'); return; }
+  // SE AVISA AL GUARDAR, QUE ES CUANDO SE PUEDE ARREGLAR. Los cuatro campos de
+  // foto esperan una dirección, pero la etiqueta del contenido —«la pastilla, el
+  // polvo, la textura»— se lee como una pregunta de qué es, y alguien la
+  // contestó. La app dijo «Producto guardado ✓» y desde ese momento ese texto
+  // era, para todo el programa, la URL de una foto.
+  // NO se borra ni se corrige por su cuenta: lo escrito es suyo. Solo se dice.
+  {
+    const malas = fotosDeLaFicha(ficha, [['foto_producto','Foto del producto'],['foto_contenido','Foto del contenido'],
+                                         ['foto_modelo','Foto de la modelo'],['foto_extra','Otra foto de apoyo']]).malas;
+    if(malas.length){
+      toast('⚠️ En ' + malas.map(m=>'«'+m.nombre+'»').join(' y ') + ' hay texto donde va la DIRECCIÓN de una foto (algo que empiece por https://). ' +
+            'Se guarda igual, pero esa foto no se usará como referencia.', 11000);
+    }
+  }
   const sel = document.getElementById('vProductoSel');
   // SOLO SE DICE «GUARDADO» SI SE ESCRIBIÓ. Con el almacén lleno no se guardaba
   // nada y salía el ✓ igual: al recargar la ficha no estaba y el trabajo de
@@ -16004,8 +16051,10 @@ function refsDeLaFicha(){
 
 function cajaCorreccionHtml(genId){
   const f = productoActivo() || {};
-  const extras = [['foto_producto','Envase'],['foto_contenido','Contenido'],['foto_modelo','Modelo']]
-    .filter(([campo])=>f[campo]);
+  // Igual que en la tira de cada toma: si no parece una dirección, no se enseña
+  // como foto. Marcarlo mandaba ese texto dentro de la corrección — y se paga.
+  const _fotos = fotosDeLaFicha(f, [['foto_producto','Envase'],['foto_contenido','Contenido'],['foto_modelo','Modelo']]);
+  const extras = _fotos.buenas.map(x=>[x.campo, x.nombre]);
   return `${botonesCambioHtml(genId)}
   <div class="caja-correccion" style="margin-top:8px;">
     <input type="text" id="corr-${genId}" placeholder="¿Qué está mal? Ej: la pastilla es verde, no amarilla">
@@ -16571,10 +16620,13 @@ function refsToma(n, imgEscena){
     items.push({url: state.animado.productoEstilo.url, etiqueta:'Producto dibujado', nota:'en estilo', marcada:false});
   }
   const f = productoActivo() || {};
-  [['foto_producto','Envase'],['foto_contenido','Contenido'],['foto_modelo','Modelo'],['foto_extra','Apoyo']]
-    .forEach(([campo, nombre])=>{ if(f[campo]) items.push({url:f[campo], etiqueta:nombre, nota:'foto real', marcada:false}); });
+  // Solo entran las que de verdad son una dirección. Antes bastaba con que el
+  // campo no estuviera vacío, así que un texto escrito por error se pintaba como
+  // imagen debajo de CADA toma y se podía marcar como referencia de un vídeo.
+  const fotos = fotosDeLaFicha(f, [['foto_producto','Envase'],['foto_contenido','Contenido'],['foto_modelo','Modelo'],['foto_extra','Apoyo']]);
+  fotos.buenas.forEach(x=> items.push({url:x.valor, etiqueta:x.nombre, nota:'foto real', marcada:false}));
 
-  if(!items.length) return '<div class="toolkit-note">Esta toma se genera solo desde el texto: no hay ninguna imagen de referencia.</div>';
+  if(!items.length) return '<div class="toolkit-note">Esta toma se genera solo desde el texto: no hay ninguna imagen de referencia.</div>' + avisoFotosMalas(fotos.malas);
 
   const max = maxRefsFor('video');
   return `<div class="tira-refs" data-reftoma="${n}">
@@ -16588,6 +16640,7 @@ function refsToma(n, imgEscena){
         <span>${escapeHtml(it.etiqueta)}</span>
       </label>`).join('')}
     <span class="toolkit-note" id="notaRefToma-${n}" style="width:100%;"></span>
+    ${avisoFotosMalas(fotos.malas)}
   </div>`;
 }
 
@@ -21366,7 +21419,10 @@ function bindImagePreview(inputId, imgId, assetKey){
   const input = document.getElementById(inputId), img = document.getElementById(imgId);
   function update(){
     const url = input.value.trim();
-    if(!url){ img.classList.add('hidden'); img.src=''; return; }
+    // Vaciar el src con '' NO deja el <img> mudo: el navegador entiende que la
+    // dirección es la página actual y la pide. Cada campo de foto vacío dejaba
+    // así un «recurso que no cargó» en el diagnóstico sin que pasara nada malo.
+    if(!url){ img.classList.add('hidden'); img.removeAttribute('src'); return; }
     img.src = url;
     img.classList.remove('hidden');
     if(assetKey) state.assets[assetKey] = url;
@@ -22132,6 +22188,10 @@ window.addEventListener('DOMContentLoaded', ()=>{
   window.__FRAGUA_ARRANCO = true;
 });
 </script>
-<div id="refLightbox"><img id="refLightboxImg" src="" alt="Referencia en grande"></div>
+<!-- SIN src, no con src="". Un <img src=""> hace que el navegador pida la PROPIA
+     página: por eso el diagnóstico traía «recurso que no cargó: img .../index.html»
+     en cada arranque, en un equipo perfectamente sano. Un <img> sin el atributo
+     no pide nada y no ensucia el informe. -->
+<div id="refLightbox"><img id="refLightboxImg" alt="Referencia en grande"></div>
 </body>
 </html>
