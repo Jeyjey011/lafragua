@@ -29806,14 +29806,14 @@ try{ if(typeof V3.listo === 'function') V3.listo('lecciones', VERSION_M1, {envue
   /* ==========================================================================
      3. AJUSTES Y CONTEXTO
   ========================================================================== */
-  var AJUSTES_DEFECTO = { formato: 'auto', molde: 'casa', embudo: 'auto', familia: 'auto' };
+  var AJUSTES_DEFECTO = { formato: 'auto', molde: 'casa', embudo: 'auto', familia: 'auto', duracion: 'auto' };
   function ajustes() {
     var a = A().formulaCasa;
     var base = lsJson('fragua_v3_formula_ultima', null) || AJUSTES_DEFECTO;
     var r = {};
     // Un anuncio nuevo hereda el molde y el embudo del último, pero no el formato:
     // tras un cantado, el siguiente no tiene por qué serlo.
-    Object.keys(AJUSTES_DEFECTO).forEach(function (k) { r[k] = (a && a[k]) || (k === 'formato' ? '' : base[k]) || AJUSTES_DEFECTO[k]; });
+    Object.keys(AJUSTES_DEFECTO).forEach(function (k) { r[k] = (a && a[k]) || (k === 'formato' || k === 'duracion' ? '' : base[k]) || AJUSTES_DEFECTO[k]; });
     return r;
   }
   function ponerAjuste(k, v) {
@@ -29904,8 +29904,21 @@ try{ if(typeof V3.listo === 'function') V3.listo('lecciones', VERSION_M1, {envue
     ctx.clave = clave; ctx.molde = aj.molde; ctx.ajustes = aj; ctx.ficha = f; ctx.narrador = nar; ctx.forma = forma;
     return ctx;
   }
+  /// Segundos elegidos a mano (número) o null si va «según el formato».
+  function duracionElegida() {
+    var v = parseInt(ajustes().duracion, 10);
+    return v > 0 ? v : null;
+  }
+  var OPCIONES_DURACION = [15, 20, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 420];
   function duracion(clave, molde) {
     var f = FORMATOS[clave] || FORMATOS.locucion;
+    var elegida = duracionElegida();
+    if (elegida) {
+      // Palabras por segundo del propio formato (el cantado dice menos palabras por segundo).
+      var pps = (f.palabras && f.seg) ? f.palabras[1] / f.seg[1] : PALABRAS_POR_SEG;
+      var sg = [Math.max(5, Math.round(elegida * 0.92)), Math.round(elegida * 1.05)];
+      return { seg: sg, palabras: [Math.round(sg[0] * pps), Math.round(sg[1] * pps)], nota: 'duración elegida por el usuario', elegida: elegida };
+    }
     var seg = f.seg ? f.seg.slice() : null;
     if (molde === 'doce' && clave !== 'reflexivo') seg = [Math.max(seg ? seg[0] : 0, DOCE.seg[0]), Math.max(seg ? seg[1] : 0, DOCE.seg[1])];
     if (!seg) return { seg: null, palabras: null, nota: f.nota || '' };
@@ -30266,6 +30279,7 @@ try{ if(typeof V3.listo === 'function') V3.listo('lecciones', VERSION_M1, {envue
   function lineaDuracion(ctx) {
     var d = duracion(ctx.clave, ctx.molde);
     if (!d.seg) return 'DURACIÓN: ' + (d.nota || 'la que pida la historia') + '.';
+    if (d.elegida) return 'DURACIÓN ELEGIDA POR EL ANUNCIANTE: unos ' + d.elegida + ' s (entre ' + d.seg[0] + ' y ' + d.seg[1] + ' s; ' + d.palabras[0] + '–' + d.palabras[1] + ' palabras). Respétala: ni más corto ni más largo. Reparte el arco completo en ese tiempo; si es corto, menos escenas, nunca menos arco.';
     return 'DURACIÓN: ' + d.seg[0] + '–' + d.seg[1] + ' s (' + d.palabras[0] + '–' + d.palabras[1] + ' palabras, a 2,5 por segundo)' +
       (d.nota ? '; ' + d.nota : '') + '.' + (ctx.clave !== 'reflexivo' ? ' Si la historia lo pide puede pasar del minuto: lo que importa es que enganche y mueva la fibra hasta la venta.' : '');
   }
@@ -30669,13 +30683,14 @@ try{ if(typeof V3.listo === 'function') V3.listo('lecciones', VERSION_M1, {envue
       '<div class="field"><label>Molde del guion</label><select id="v3Molde">' + opciones([['casa', 'Fórmula de la casa — el arco que vende'], ['doce', '12 pasos — salud o marca privada'], ['reflexivo', 'Reflexivo — sin exclamaciones, 50–60 s']], aj.molde) + '</select></div>' +
       '<div class="field"><label>Embudo</label><select id="v3Embudo">' + opciones([['auto', 'El que mejor encaje'], ['tofu', 'TOFU — público frío'], ['mofu', 'MOFU — público tibio'], ['bofu', 'BOFU — público caliente']], aj.embudo) + '</select></div>' +
       '<div class="field"><label>Familia del ángulo</label><select id="v3Familia">' + opciones([['auto', 'Rotar (no repetir la última)'], ['revancha', 'Revancha — el ex o la rival'], ['ciencia', 'Ciencia que quita la culpa'], ['cronograma', 'Cronograma — semana a semana'], ['mito', 'Mito']], aj.familia) + '</select></div>' +
+      '<div class="field"><label>⏱️ Duración del vídeo</label><select id="v3Duracion">' + opcionesDuracion(aj.duracion) + '</select></div>' +
       '</div><div class="es-explain" id="v3FormulaResumen"></div></div>';
     ancla.insertAdjacentHTML('afterend', h);
-    ['v3Formato', 'v3Molde', 'v3Embudo', 'v3Familia'].forEach(function (id) {
+    ['v3Formato', 'v3Molde', 'v3Embudo', 'v3Familia', 'v3Duracion'].forEach(function (id) {
       var e = el(id);
-      if (e) e.addEventListener('change', function () { ponerAjuste({ v3Formato: 'formato', v3Molde: 'molde', v3Embudo: 'embudo', v3Familia: 'familia' }[id], e.value); pintarResumen(); pintarVozInfo(); textosDeLaInterfaz(); });
+      if (e) e.addEventListener('change', function () { ponerAjuste({ v3Formato: 'formato', v3Molde: 'molde', v3Embudo: 'embudo', v3Familia: 'familia', v3Duracion: 'duracion' }[id], e.value); refrescarDuracion(); pintarResumen(); pintarVozInfo(); textosDeLaInterfaz(); });
     });
-    sel.addEventListener('change', function () { setTimeout(function () { pintarResumen(); pintarVozInfo(); }, 0); });
+    sel.addEventListener('change', function () { setTimeout(function () { refrescarDuracion(); pintarResumen(); pintarVozInfo(); }, 0); });
     var fi = el('ideasFormato'); if (fi) fi.addEventListener('change', function () { setTimeout(pintarResumen, 0); });
     var hint = document.querySelector('#panelA1 > p.hint');
     if (hint && /storytelling reflexivo/.test(hint.textContent || '')) hint.textContent = 'Este pipeline vende con tu fórmula: dolor que se ve, desesperación, el producto como salvación, transformación y cierre. El molde reflexivo queda como opción.';
@@ -30684,6 +30699,7 @@ try{ if(typeof V3.listo === 'function') V3.listo('lecciones', VERSION_M1, {envue
   function refrescarPanel() {
     var aj = ajustes();
     [['v3Formato', 'formato'], ['v3Molde', 'molde'], ['v3Embudo', 'embudo'], ['v3Familia', 'familia']].forEach(function (p) { var e = el(p[0]); if (e) e.value = aj[p[1]]; });
+    refrescarDuracion();
     var eu = el('v3EmbudoUGC'); if (eu) eu.value = aj.embudo;
     pintarResumen();
     textosDeLaInterfaz();
@@ -30697,6 +30713,33 @@ try{ if(typeof V3.listo === 'function') V3.listo('lecciones', VERSION_M1, {envue
       ' · ' + (d.seg ? d.seg[0] + '–' + d.seg[1] + ' s' : esc(d.nota)) +
       ' · voz: <b>' + esc(v.id ? v.nombre : 'falta elegirla') + '</b>' + (v.motivo ? ' <span style="color:var(--text-dim);">(' + esc(v.motivo) + ')</span>' : '') +
       (f.marca_profesional ? ' · marca de profesional (tono tierno)' : '') + (f.no_comparar ? ' · sin comparar' : '');
+  }
+  /// «Según el formato (X–Y s)» + los segundos fijos. El texto de «auto» cambia con el formato.
+  function opcionesDuracion(actual) {
+    var aj = ajustes(), ctx = null, txt = 'Según el formato';
+    try {
+      ctx = contexto('guion');
+      var F = FORMATOS[ctx.clave] || FORMATOS.locucion, seg = F.seg;
+      if (ctx.molde === 'doce' && ctx.clave !== 'reflexivo' && seg) seg = [Math.max(seg[0], DOCE.seg[0]), Math.max(seg[1], DOCE.seg[1])];
+      if (seg) txt += ' (' + seg[0] + '–' + seg[1] + ' s)';
+    } catch (e) { }
+    var lista = [['auto', txt]].concat(OPCIONES_DURACION.map(function (n) { return [String(n), n < 60 ? n + ' s' : (n % 60 ? Math.floor(n / 60) + ' min ' + (n % 60) + ' s' : (n / 60) + ' min') + ' (' + n + ' s)']; }));
+    var v = String(actual == null ? aj.duracion : actual);
+    if (v !== 'auto' && OPCIONES_DURACION.indexOf(parseInt(v, 10)) < 0 && parseInt(v, 10) > 0) lista.push([v, v + ' s']);
+    return opciones(lista, v);
+  }
+  function refrescarDuracion() {
+    ['v3Duracion', 'v3DuracionUGC'].forEach(function (id) {
+      var e = el(id);
+      if (e) { var v = String(ajustes().duracion || 'auto'); e.innerHTML = opcionesDuracion(v); e.value = v; }
+    });
+  }
+  function pintarDuracionUGC() {
+    var eu = el('v3EmbudoUGC');
+    if (!eu || el('v3DuracionUGC')) return;
+    var campo = (eu.closest && eu.closest('.field')) || eu.parentNode;
+    campo.insertAdjacentHTML('afterend', '<div class="field"><label>⏱️ Duración del vídeo</label><select id="v3DuracionUGC">' + opcionesDuracion() + '</select></div>');
+    el('v3DuracionUGC').addEventListener('change', function (e) { ponerAjuste('duracion', e.target.value); refrescarPanel(); });
   }
   function pintarEmbudoUGC() {
     var t = el('pTipo');
@@ -30920,6 +30963,7 @@ try{ if(typeof V3.listo === 'function') V3.listo('lecciones', VERSION_M1, {envue
       API.pintadoTrasArranque = window.__FRAGUA_ARRANCO === true;
       try { pintarPanelFormula(); } catch (e) { fallo('panel de la fórmula', e); }
       try { pintarEmbudoUGC(); } catch (e) { fallo('embudo del UGC', e); }
+      try { pintarDuracionUGC(); } catch (e) { fallo('duración del UGC', e); }
       try { pintarCamposFicha(); var p = ficha(); if (p && p.nombre && typeof window.pintarFichaProducto === 'function') { CAMPOS_FICHA.forEach(function (c) { var e = el(c[0]); if (e) e.value = p[c[1]] || ''; }); var mp = el('vMarcaProfesional'), nc = el('vNoComparar'); if (mp) mp.checked = !!p.marca_profesional; if (nc) nc.checked = !!p.no_comparar; } } catch (e) { fallo('campos de la ficha', e); }
       try { pintarVozInfo(); } catch (e) { fallo('voz del anuncio', e); }
       try { textosDeLaInterfaz(); } catch (e) { fallo('textos de la pantalla', e); }
@@ -30936,6 +30980,7 @@ try{ if(typeof V3.listo === 'function') V3.listo('lecciones', VERSION_M1, {envue
     __m4: true, version: VERSION, marca: MARCA,
     cubre: ['guion', 'voz'],   // M1: estas etapas las inyecta M4; no las metas otra vez en el texto
     ajustes: ajustes, ponerAjuste: ponerAjuste, contexto: contexto, bloque: bloque, detectarForma: detectarForma,
+    duracionElegida: function () { return duracionElegida(); },
     duracionDe: function (clave, molde) { return duracion(clave || claveFormato('guion'), molde || ajustes().molde); },
     claveFormato: claveFormato, FORMATOS: FORMATOS, DOCE: DOCE,
     VOCES: VOCES, decidirVoz: decidirVoz, proponerVoz: proponer, revisarVoz: revisarVoz, narrador: narrador,
